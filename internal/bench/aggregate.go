@@ -5,15 +5,19 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 )
 
 // Summary holds the measured (non-warmup) results of a multi-run benchmark.
 type Summary struct {
-	Model   string
-	Host    string
-	Warmup  int      // number of discarded warmup runs
-	Results []Result // measured runs, in order
+	Model       string
+	Host        string
+	Warmup      int       // number of discarded warmup runs (batches)
+	Concurrency int       // streams fired in parallel per run (1 = sequential)
+	Results     []Result  // every measured stream (runs × concurrency), in order
+	BatchTPS    []float64 // aggregate tok/s per run (total output tokens ÷ batch wall)
 }
 
 // Stat summarizes a metric across the measured runs as a median plus the
@@ -27,27 +31,125 @@ type Stat struct {
 }
 
 // RunN performs warmup discarded runs followed by `runs` measured runs against
-// the same endpoint and returns their results. A warmup absorbs cold-start and
-// connection setup so the measured numbers reflect steady state. Any request
-// error aborts the whole benchmark (fail fast on auth/URL problems).
-func RunN(ctx context.Context, cfg Config, runs, warmup int) (Summary, error) {
+// the same endpoint and returns their results. Each run is a batch of
+// `concurrency` parallel streams (concurrency 1 = sequential, the default). A
+// warmup absorbs cold-start and connection setup so the measured numbers
+// reflect steady state. Any request error aborts the whole benchmark (fail fast
+// on auth/URL problems).
+func RunN(ctx context.Context, cfg Config, runs, warmup, concurrency int) (Summary, error) {
 	if runs < 1 {
 		runs = 1
 	}
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	now := cfg.Now
+	if now == nil {
+		now = time.Now
+	}
 	for i := range warmup {
-		if _, err := Run(ctx, cfg); err != nil {
-			return Summary{}, fmt.Errorf("warmup run %d: %w", i+1, err)
+		if _, _, err := runBatch(ctx, cfg, concurrency, now); err != nil {
+			return Summary{}, fmt.Errorf("warmup batch %d: %w", i+1, err)
 		}
 	}
-	sum := Summary{Model: cfg.Model, Host: hostOf(cfg.URL), Warmup: warmup}
+	sum := Summary{Model: cfg.Model, Host: hostOf(cfg.URL), Warmup: warmup, Concurrency: concurrency}
 	for i := range runs {
-		r, err := Run(ctx, cfg)
+		results, aggTPS, err := runBatch(ctx, cfg, concurrency, now)
 		if err != nil {
-			return Summary{}, fmt.Errorf("run %d: %w", i+1, err)
+			return Summary{}, fmt.Errorf("batch %d: %w", i+1, err)
 		}
-		sum.Results = append(sum.Results, r)
+		sum.Results = append(sum.Results, results...)
+		sum.BatchTPS = append(sum.BatchTPS, aggTPS)
 	}
 	return sum, nil
+}
+
+// ParseLevels parses a comma-separated list of concurrency levels (e.g.
+// "1,2,4,8") into a slice of positive ints, for the sweep mode.
+func ParseLevels(s string) ([]int, error) {
+	var levels []int
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return nil, fmt.Errorf("invalid concurrency level %q", p)
+		}
+		if n < 1 {
+			return nil, fmt.Errorf("concurrency level must be >= 1, got %d", n)
+		}
+		levels = append(levels, n)
+	}
+	if len(levels) == 0 {
+		return nil, fmt.Errorf("no concurrency levels given")
+	}
+	return levels, nil
+}
+
+// RunSweep benchmarks the same endpoint at each concurrency level in turn,
+// returning one Summary per level (the throughput-vs-load curve).
+func RunSweep(ctx context.Context, cfg Config, runs, warmup int, levels []int) ([]Summary, error) {
+	sums := make([]Summary, 0, len(levels))
+	for _, c := range levels {
+		s, err := RunN(ctx, cfg, runs, warmup, c)
+		if err != nil {
+			return nil, fmt.Errorf("concurrency %d: %w", c, err)
+		}
+		sums = append(sums, s)
+	}
+	return sums, nil
+}
+
+// runBatch runs `concurrency` requests in parallel and returns their results
+// plus the aggregate generation rate (total output tokens ÷ batch wall time).
+// Any stream error aborts the batch.
+func runBatch(ctx context.Context, cfg Config, concurrency int, now func() time.Time) ([]Result, float64, error) {
+	if concurrency <= 1 {
+		r, err := Run(ctx, cfg)
+		if err != nil {
+			return nil, 0, err
+		}
+		return []Result{r}, r.EndToEndTPS(), nil
+	}
+
+	type outcome struct {
+		r   Result
+		err error
+	}
+	ch := make(chan outcome, concurrency)
+	t0 := now()
+	for range concurrency {
+		go func() {
+			r, err := Run(ctx, cfg)
+			ch <- outcome{r, err}
+		}()
+	}
+
+	var results []Result
+	var firstErr error
+	total := 0
+	for range concurrency {
+		o := <-ch
+		if o.err != nil {
+			if firstErr == nil {
+				firstErr = o.err
+			}
+			continue
+		}
+		results = append(results, o.r)
+		total += o.r.OutputTokens
+	}
+	if firstErr != nil {
+		return nil, 0, firstErr
+	}
+
+	agg := 0.0
+	if wall := now().Sub(t0).Seconds(); wall > 0 {
+		agg = float64(total) / wall
+	}
+	return results, agg, nil
 }
 
 // TTFT returns p50/p90 of time-to-first-token, in seconds.
@@ -63,6 +165,17 @@ func (s Summary) GenTPS() Stat {
 // E2ETPS returns p50/p90 of the end-to-end rate (tokens/sec, incl. TTFT).
 func (s Summary) E2ETPS() Stat {
 	return s.stat(func(r Result) float64 { return r.EndToEndTPS() })
+}
+
+// AggregateTPS returns the min/p50/max of the per-run aggregate throughput
+// (total output tokens across all concurrent streams ÷ batch wall time). It is
+// meaningful only under concurrency > 1.
+func (s Summary) AggregateTPS() Stat {
+	return Stat{
+		Min: percentile(s.BatchTPS, 0),
+		P50: percentile(s.BatchTPS, 0.50),
+		Max: percentile(s.BatchTPS, 1),
+	}
 }
 
 // ITL pools the inter-token gaps from every measured run and returns their p50

@@ -86,6 +86,8 @@ as-is.
 | `--warmup` | `1` | Discarded warmup runs before measuring (absorbs cold start). |
 | `--detail` | `false` | Also show inter-token latency (ITL) p50/p95. |
 | `--json` | `false` | Emit machine-readable JSON instead of the text summary. |
+| `--concurrency` | `1` | Parallel streams per run; >1 reports aggregate tok/s under load. |
+| `--sweep` | — | Comma-separated concurrency levels to sweep, e.g. `1,2,4,8`. |
 | `--timeout` | `60s` | Per-request timeout. |
 
 > Each invocation sends `--warmup` + `--runs` requests (6 by default), so it
@@ -134,6 +136,27 @@ stalls/jitter that a single averaged rate hides.
 `--json` emits the full result as machine-readable JSON instead of the text
 table — the p50/min/max for every metric, ITL, and a `runs_detail` array with
 each run's raw numbers — for CI gates, storing, and diffing over time.
+
+### Concurrency and load
+
+By default tokps measures a single stream — the "how fast is one response"
+question. `--concurrency N` instead fires **N streams in parallel** per run and
+adds an **aggregate tok/s** line (total output tokens across all streams ÷ wall
+time) alongside the per-stream TTFT/TPS distribution — i.e. throughput under
+load.
+
+`--sweep 1,2,4,8` runs the benchmark at each level in turn and prints the
+**throughput-vs-concurrency curve**, so you can see where an endpoint saturates:
+
+```text
+tokps — glm-5.2 @ api.z.ai  (sweep, 3 runs, 1 warmup)
+
+  concurrency   aggregate tok/s   TTFT p50   TPS p50/stream
+  1             73.1              0.42s      73.1
+  2             140.0             0.45s      70.0
+  4             250.0             0.61s      62.5
+  8             300.0             1.10s      37.5
+```
 
 ### Reasoning models
 

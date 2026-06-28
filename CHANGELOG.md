@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an averaged rate hides.
 - `--json` emits the full result as machine-readable JSON (per-metric
   min/p50/max, ITL, and a `runs_detail` array) for CI gates and diffing.
+- `--concurrency N` fires N parallel streams per run and reports aggregate
+  tokens/sec under load alongside the per-stream metrics.
+- `--sweep 1,2,4,8` benchmarks across concurrency levels and prints the
+  throughput-vs-concurrency curve (text or JSON).
 
 ## [0.1.0] - 2026-06-28
 

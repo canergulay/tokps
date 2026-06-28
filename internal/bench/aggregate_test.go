@@ -84,6 +84,115 @@ func TestSummaryITLNotOkWhenNoGaps(t *testing.T) {
 	}
 }
 
+func TestRunNConcurrencyFiresParallelStreams(t *testing.T) {
+	var active, maxActive, calls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		n := active.Add(1)
+		for { // track the high-water mark of concurrent in-flight requests
+			m := maxActive.Load()
+			if n <= m || maxActive.CompareAndSwap(m, n) {
+				break
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+		active.Add(-1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, _ := w.(http.Flusher)
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":5}}\n\n"))
+		w.Write([]byte("data: [DONE]\n\n"))
+		if fl != nil {
+			fl.Flush()
+		}
+	}))
+	defer ts.Close()
+
+	sum, err := RunN(context.Background(), testConfig(ts.URL), 2, 1, 4)
+	if err != nil {
+		t.Fatalf("RunN error: %v", err)
+	}
+	if sum.Concurrency != 4 {
+		t.Errorf("Concurrency = %d, want 4", sum.Concurrency)
+	}
+	if got := calls.Load(); got != 12 {
+		t.Errorf("server calls = %d, want 12 (3 batches x 4 streams)", got)
+	}
+	if len(sum.Results) != 8 {
+		t.Errorf("results = %d, want 8 (2 runs x 4 streams)", len(sum.Results))
+	}
+	if len(sum.BatchTPS) != 2 {
+		t.Errorf("BatchTPS = %d, want 2 (one aggregate per run)", len(sum.BatchTPS))
+	}
+	if maxActive.Load() < 2 {
+		t.Errorf("maxActive = %d, expected parallel overlap (>=2)", maxActive.Load())
+	}
+}
+
+func TestParseLevels(t *testing.T) {
+	got, err := ParseLevels("1,2, 4 ,8")
+	if err != nil {
+		t.Fatalf("ParseLevels error: %v", err)
+	}
+	want := []int{1, 2, 4, 8}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got[%d] = %d, want %d", i, got[i], want[i])
+		}
+	}
+	if _, err := ParseLevels("1,x"); err == nil {
+		t.Error("expected error on non-numeric level")
+	}
+	if _, err := ParseLevels("0"); err == nil {
+		t.Error("expected error on level < 1")
+	}
+	if _, err := ParseLevels(""); err == nil {
+		t.Error("expected error on empty input")
+	}
+}
+
+func TestRunSweepRunsEachLevel(t *testing.T) {
+	var calls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, _ := w.(http.Flusher)
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":5}}\n\n"))
+		w.Write([]byte("data: [DONE]\n\n"))
+		if fl != nil {
+			fl.Flush()
+		}
+	}))
+	defer ts.Close()
+
+	sums, err := RunSweep(context.Background(), testConfig(ts.URL), 1, 0, []int{1, 2})
+	if err != nil {
+		t.Fatalf("RunSweep error: %v", err)
+	}
+	if len(sums) != 2 {
+		t.Fatalf("summaries = %d, want 2", len(sums))
+	}
+	if sums[0].Concurrency != 1 || sums[1].Concurrency != 2 {
+		t.Errorf("concurrencies = %d,%d want 1,2", sums[0].Concurrency, sums[1].Concurrency)
+	}
+	// runs=1, warmup=0: level 1 -> 1 call, level 2 -> 2 calls = 3 total.
+	if got := calls.Load(); got != 3 {
+		t.Errorf("server calls = %d, want 3", got)
+	}
+}
+
+func TestSummaryAggregateTPS(t *testing.T) {
+	s := Summary{Concurrency: 4, BatchTPS: []float64{100, 200}}
+	a := s.AggregateTPS()
+	if a.Min != 100 || a.P50 != 150 || a.Max != 200 {
+		t.Errorf("AggregateTPS = %+v, want {Min:100 P50:150 Max:200}", a)
+	}
+}
+
 func TestRunNDiscardsWarmupKeepsMeasuredRuns(t *testing.T) {
 	var calls atomic.Int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -99,7 +208,7 @@ func TestRunNDiscardsWarmupKeepsMeasuredRuns(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	sum, err := RunN(context.Background(), testConfig(ts.URL), 2, 1)
+	sum, err := RunN(context.Background(), testConfig(ts.URL), 2, 1, 1)
 	if err != nil {
 		t.Fatalf("RunN error: %v", err)
 	}

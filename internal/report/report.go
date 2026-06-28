@@ -54,7 +54,12 @@ func FormatSummary(w io.Writer, s bench.Summary, detail bool) {
 		return
 	}
 
-	fmt.Fprintf(w, "\ntokps — %s @ %s  (%d runs, %d warmup)\n\n", s.Model, s.Host, len(s.Results), s.Warmup)
+	conc := s.Concurrency > 1
+	if conc {
+		fmt.Fprintf(w, "\ntokps — %s @ %s  (concurrency %d, %d runs, %d warmup)\n\n", s.Model, s.Host, s.Concurrency, len(s.BatchTPS), s.Warmup)
+	} else {
+		fmt.Fprintf(w, "\ntokps — %s @ %s  (%d runs, %d warmup)\n\n", s.Model, s.Host, len(s.Results), s.Warmup)
+	}
 
 	if pt := s.PromptTokens(); pt >= 0 {
 		fmt.Fprintf(w, "  prompt tokens     %d\n", pt)
@@ -66,14 +71,27 @@ func FormatSummary(w io.Writer, s bench.Summary, detail bool) {
 	if !s.Exact() {
 		label = "estimated"
 	}
-	fmt.Fprintf(w, "  output tokens     %d   (%s, median)\n\n", s.MedianOutputTokens(), label)
+	medianNote := "median"
+	if conc {
+		medianNote = "median/stream"
+	}
+	fmt.Fprintf(w, "  output tokens     %d   (%s, %s)\n\n", s.MedianOutputTokens(), label, medianNote)
 
+	if conc {
+		a := s.AggregateTPS()
+		fmt.Fprintf(w, "  aggregate   p50 %.1f   range %.1f–%.1f   (tok/s, all streams)\n", a.P50, a.Min, a.Max)
+	}
+
+	per := ""
+	if conc {
+		per = ", per stream"
+	}
 	ttft, gen, e2e := s.TTFT(), s.GenTPS(), s.E2ETPS()
 	if s.Streamed() {
 		fmt.Fprintf(w, "  TTFT     p50 %s   range %s–%s\n", secs(ttft.P50), secs(ttft.Min), secs(ttft.Max))
 	}
-	fmt.Fprintf(w, "  TPS      p50 %.1f   range %.1f–%.1f   (generation, N-1)\n", gen.P50, gen.Min, gen.Max)
-	fmt.Fprintf(w, "  e2e      p50 %.1f   range %.1f–%.1f   (incl. TTFT)\n", e2e.P50, e2e.Min, e2e.Max)
+	fmt.Fprintf(w, "  TPS      p50 %.1f   range %.1f–%.1f   (generation, N-1%s)\n", gen.P50, gen.Min, gen.Max, per)
+	fmt.Fprintf(w, "  e2e      p50 %.1f   range %.1f–%.1f   (incl. TTFT%s)\n", e2e.P50, e2e.Min, e2e.Max, per)
 	if detail {
 		writeITL(w, s)
 	}
@@ -108,28 +126,40 @@ func FormatJSON(w io.Writer, s bench.Summary) error {
 		E2ETPS       float64 `json:"e2e_tps"`
 	}
 
+	// Number of measured runs (batches) — one aggregate sample per run.
+	runCount := len(s.BatchTPS)
+	if runCount == 0 {
+		runCount = len(s.Results)
+	}
 	ttft, gen, e2e := s.TTFT(), s.GenTPS(), s.E2ETPS()
 	out := struct {
 		Model              string `json:"model"`
 		Host               string `json:"host"`
 		Runs               int    `json:"runs"`
 		Warmup             int    `json:"warmup"`
+		Concurrency        int    `json:"concurrency"`
 		PromptTokens       int    `json:"prompt_tokens"`
 		OutputTokensMedian int    `json:"output_tokens_median"`
 		TokensExact        bool   `json:"tokens_exact"`
 		Streamed           bool   `json:"streamed"`
+		AggregateTPS       *rng   `json:"aggregate_tps,omitempty"`
 		TTFTSeconds        rng    `json:"ttft_s"`
 		TPS                rng    `json:"tps"`
 		E2ETPS             rng    `json:"e2e_tps"`
 		ITLMillis          *itl   `json:"itl_ms,omitempty"`
 		RunsDetail         []run  `json:"runs_detail"`
 	}{
-		Model: s.Model, Host: s.Host, Runs: len(s.Results), Warmup: s.Warmup,
+		Model: s.Model, Host: s.Host, Runs: runCount, Warmup: s.Warmup,
+		Concurrency:  max(s.Concurrency, 1),
 		PromptTokens: s.PromptTokens(), OutputTokensMedian: s.MedianOutputTokens(),
 		TokensExact: s.Exact(), Streamed: s.Streamed(),
 		TTFTSeconds: rng{ttft.Min, ttft.P50, ttft.Max},
 		TPS:         rng{gen.Min, gen.P50, gen.Max},
 		E2ETPS:      rng{e2e.Min, e2e.P50, e2e.Max},
+	}
+	if s.Concurrency > 1 {
+		a := s.AggregateTPS()
+		out.AggregateTPS = &rng{a.Min, a.P50, a.Max}
 	}
 	if p50, p95, ok := s.ITL(); ok {
 		out.ITLMillis = &itl{P50: p50, P95: p95}
@@ -145,6 +175,43 @@ func FormatJSON(w io.Writer, s bench.Summary) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+// FormatSweep writes the throughput-vs-concurrency curve (one row per level).
+func FormatSweep(w io.Writer, sums []bench.Summary) {
+	if len(sums) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\ntokps — %s @ %s  (sweep, %d runs, %d warmup)\n\n", sums[0].Model, sums[0].Host, len(sums[0].BatchTPS), sums[0].Warmup)
+	fmt.Fprintf(w, "  %-11s   %-15s   %-8s   %s\n", "concurrency", "aggregate tok/s", "TTFT p50", "TPS p50/stream")
+	for _, s := range sums {
+		fmt.Fprintf(w, "  %-11d   %-15.1f   %-8s   %.1f\n", s.Concurrency, s.AggregateTPS().P50, secs(s.TTFT().P50), s.GenTPS().P50)
+	}
+	fmt.Fprintln(w)
+}
+
+// FormatSweepJSON writes the sweep as a JSON array, one object per level.
+func FormatSweepJSON(w io.Writer, sums []bench.Summary) error {
+	type level struct {
+		Concurrency    int     `json:"concurrency"`
+		AggregateTPS   float64 `json:"aggregate_tps"`
+		TTFTP50Seconds float64 `json:"ttft_p50_s"`
+		TPSP50         float64 `json:"tps_p50"`
+		E2EP50         float64 `json:"e2e_p50"`
+	}
+	arr := make([]level, 0, len(sums))
+	for _, s := range sums {
+		arr = append(arr, level{
+			Concurrency:    s.Concurrency,
+			AggregateTPS:   s.AggregateTPS().P50,
+			TTFTP50Seconds: s.TTFT().P50,
+			TPSP50:         s.GenTPS().P50,
+			E2EP50:         s.E2ETPS().P50,
+		})
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(arr)
 }
 
 func dur(d time.Duration) string {

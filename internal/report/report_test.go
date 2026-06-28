@@ -70,6 +70,97 @@ func TestFormatSummarySingleRunUsesDetailedView(t *testing.T) {
 	}
 }
 
+func TestFormatSummaryConcurrentShowsAggregate(t *testing.T) {
+	s := bench.Summary{
+		Model: "glm-5.2", Host: "api.z.ai", Warmup: 1, Concurrency: 4,
+		BatchTPS: []float64{235, 245},
+		Results: []bench.Result{
+			{OutputTokens: 200, TokensExact: true, Streamed: true, TTFT: 2600 * time.Millisecond, GenTime: 2700 * time.Millisecond, TotalWall: 5300 * time.Millisecond},
+			{OutputTokens: 210, TokensExact: true, Streamed: true, TTFT: 2800 * time.Millisecond, GenTime: 2900 * time.Millisecond, TotalWall: 5700 * time.Millisecond},
+		},
+	}
+	var buf bytes.Buffer
+	FormatSummary(&buf, s, false)
+	out := buf.String()
+	for _, want := range []string{"concurrency 4", "aggregate", "all streams"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("concurrent output missing %q:\n%s", want, out)
+		}
+	}
+
+	// A non-concurrent summary must not show the aggregate/concurrency line.
+	s.Concurrency = 1
+	var buf2 bytes.Buffer
+	FormatSummary(&buf2, s, false)
+	if strings.Contains(buf2.String(), "aggregate") || strings.Contains(buf2.String(), "concurrency") {
+		t.Errorf("non-concurrent output should not show aggregate/concurrency:\n%s", buf2.String())
+	}
+}
+
+func TestFormatJSONIncludesConcurrencyAndAggregate(t *testing.T) {
+	s := bench.Summary{
+		Model: "m", Host: "h", Warmup: 1, Concurrency: 4, BatchTPS: []float64{235, 245},
+		Results: []bench.Result{
+			{OutputTokens: 200, TokensExact: true, Streamed: true, TTFT: time.Second, GenTime: 2 * time.Second, TotalWall: 3 * time.Second},
+		},
+	}
+	var buf bytes.Buffer
+	if err := FormatJSON(&buf, s); err != nil {
+		t.Fatalf("FormatJSON error: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if m["concurrency"].(float64) != 4 {
+		t.Errorf("concurrency = %v, want 4", m["concurrency"])
+	}
+	if agg, ok := m["aggregate_tps"].(map[string]any); !ok || agg["p50"] == nil {
+		t.Errorf("missing aggregate_tps.p50: %v", m["aggregate_tps"])
+	}
+}
+
+func TestFormatSweepShowsCurve(t *testing.T) {
+	sums := []bench.Summary{
+		{Model: "glm-5.2", Host: "api.z.ai", Warmup: 1, Concurrency: 1, BatchTPS: []float64{73},
+			Results: []bench.Result{{OutputTokens: 200, Streamed: true, TokensExact: true, TTFT: 2600 * time.Millisecond, GenTime: 2700 * time.Millisecond, TotalWall: 5300 * time.Millisecond}}},
+		{Model: "glm-5.2", Host: "api.z.ai", Warmup: 1, Concurrency: 4, BatchTPS: []float64{240},
+			Results: []bench.Result{{OutputTokens: 200, Streamed: true, TokensExact: true, TTFT: 3100 * time.Millisecond, GenTime: 2700 * time.Millisecond, TotalWall: 5300 * time.Millisecond}}},
+	}
+	var buf bytes.Buffer
+	FormatSweep(&buf, sums)
+	out := buf.String()
+	for _, want := range []string{"sweep", "concurrency", "aggregate", "glm-5.2"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("sweep output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestFormatSweepJSONIsArray(t *testing.T) {
+	sums := []bench.Summary{
+		{Concurrency: 1, BatchTPS: []float64{73}, Results: []bench.Result{{OutputTokens: 200, Streamed: true, TokensExact: true, TTFT: time.Second, GenTime: 2 * time.Second, TotalWall: 3 * time.Second}}},
+		{Concurrency: 4, BatchTPS: []float64{240}, Results: []bench.Result{{OutputTokens: 200, Streamed: true, TokensExact: true, TTFT: time.Second, GenTime: 2 * time.Second, TotalWall: 3 * time.Second}}},
+	}
+	var buf bytes.Buffer
+	if err := FormatSweepJSON(&buf, sums); err != nil {
+		t.Fatalf("FormatSweepJSON error: %v", err)
+	}
+	var arr []map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &arr); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(arr) != 2 {
+		t.Fatalf("array length = %d, want 2", len(arr))
+	}
+	if arr[0]["concurrency"].(float64) != 1 {
+		t.Errorf("arr[0].concurrency = %v, want 1", arr[0]["concurrency"])
+	}
+	if arr[1]["aggregate_tps"] == nil {
+		t.Errorf("arr[1] missing aggregate_tps")
+	}
+}
+
 func TestFormatSummaryDetailAddsInterTokenLatency(t *testing.T) {
 	s := bench.Summary{
 		Model: "m", Host: "h", Warmup: 1,
