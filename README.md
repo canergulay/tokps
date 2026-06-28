@@ -2,11 +2,13 @@
   <img src="assets/logo.png" alt="tokps logo" width="128" height="128">
 </p>
 
-# tokps
+<h1 align="center">tokps</h1>
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/canergulay/tokps.svg)](https://pkg.go.dev/github.com/canergulay/tokps)
-[![Go Version](https://img.shields.io/badge/go-1.23%2B-00ADD8?logo=go)](https://go.dev/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+<p align="center">
+  <a href="https://pkg.go.dev/github.com/canergulay/tokps"><img src="https://pkg.go.dev/badge/github.com/canergulay/tokps.svg" alt="Go Reference"></a>
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/go-1.23%2B-00ADD8?logo=go" alt="Go Version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
+</p>
 
 A tiny CLI that measures the **token-generation throughput (TPS)** of any
 OpenAI-compatible `/chat/completions` endpoint — OpenAI, Z.ai / GLM, local
