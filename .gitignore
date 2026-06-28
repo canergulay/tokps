@@ -5,3 +5,6 @@
 
 # Editor
 .DS_Store
+
+# Internal planning/design docs (not part of the published project)
+docs/superpowers/
