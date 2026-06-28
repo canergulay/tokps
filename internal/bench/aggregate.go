@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"time"
 )
 
 // Summary holds the measured (non-warmup) results of a multi-run benchmark.
@@ -62,6 +63,22 @@ func (s Summary) GenTPS() Stat {
 // E2ETPS returns p50/p90 of the end-to-end rate (tokens/sec, incl. TTFT).
 func (s Summary) E2ETPS() Stat {
 	return s.stat(func(r Result) float64 { return r.EndToEndTPS() })
+}
+
+// ITL pools the inter-token gaps from every measured run and returns their p50
+// and p95 in milliseconds. ok is false when no streaming gaps were recorded
+// (non-streaming responses, or single-token outputs).
+func (s Summary) ITL() (p50ms, p95ms float64, ok bool) {
+	var gaps []float64
+	for _, r := range s.Results {
+		for _, d := range r.ITL {
+			gaps = append(gaps, float64(d)/float64(time.Millisecond))
+		}
+	}
+	if len(gaps) == 0 {
+		return 0, 0, false
+	}
+	return percentile(gaps, 0.50), percentile(gaps, 0.95), true
 }
 
 // MedianOutputTokens returns the median output-token count across runs.

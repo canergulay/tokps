@@ -59,6 +59,31 @@ func TestSummaryStatsReportMedianAndRange(t *testing.T) {
 	}
 }
 
+func TestSummaryITLPoolsGapsAsP50P95Millis(t *testing.T) {
+	s := Summary{Results: []Result{
+		{ITL: []time.Duration{10 * time.Millisecond, 20 * time.Millisecond}},
+		{ITL: []time.Duration{30 * time.Millisecond, 40 * time.Millisecond}},
+	}}
+	p50, p95, ok := s.ITL()
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	// pooled ms = [10,20,30,40]; p50 = 25, p95 = 30 + 0.85*10 = 38.5
+	if p50 != 25 {
+		t.Errorf("p50 = %v ms, want 25", p50)
+	}
+	if p95 != 38.5 {
+		t.Errorf("p95 = %v ms, want 38.5", p95)
+	}
+}
+
+func TestSummaryITLNotOkWhenNoGaps(t *testing.T) {
+	s := Summary{Results: []Result{{}}}
+	if _, _, ok := s.ITL(); ok {
+		t.Error("ok = true, want false (no streaming gaps)")
+	}
+}
+
 func TestRunNDiscardsWarmupKeepsMeasuredRuns(t *testing.T) {
 	var calls atomic.Int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

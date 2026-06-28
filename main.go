@@ -28,6 +28,8 @@ func main() {
 	timeout := flag.Duration("timeout", 60*time.Second, "Per-request timeout")
 	runs := flag.Int("runs", 5, "Number of timed runs (reports p50 + min–max across them)")
 	warmup := flag.Int("warmup", 1, "Number of discarded warmup runs before measuring")
+	detail := flag.Bool("detail", false, "Show extra detail (inter-token latency p50/p95)")
+	jsonOut := flag.Bool("json", false, "Emit machine-readable JSON instead of the text summary")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
@@ -64,5 +66,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	report.FormatSummary(os.Stdout, sum)
+
+	if *jsonOut {
+		if err := report.FormatJSON(os.Stdout, sum); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	report.FormatSummary(os.Stdout, sum, *detail)
 }

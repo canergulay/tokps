@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--warmup` (default 1) discarded ones, reported as median (p50) plus the
   observed min–max range, so a single cold start or network hiccup doesn't skew
   the number. Use `--runs 1 --warmup 0` for a single cheap request.
+- `--detail` adds an inter-token latency (ITL) line — p50/p95 of the gaps
+  between successive streamed tokens, pooled across runs, surfacing jitter that
+  an averaged rate hides.
+- `--json` emits the full result as machine-readable JSON (per-metric
+  min/p50/max, ITL, and a `runs_detail` array) for CI gates and diffing.
 
 ## [0.1.0] - 2026-06-28
 

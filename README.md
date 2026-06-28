@@ -84,6 +84,8 @@ as-is.
 | `--max-tokens` | `512` | Upper bound on output length. |
 | `--runs` | `5` | Number of timed runs; reports p50 + min–max across them. |
 | `--warmup` | `1` | Discarded warmup runs before measuring (absorbs cold start). |
+| `--detail` | `false` | Also show inter-token latency (ITL) p50/p95. |
+| `--json` | `false` | Emit machine-readable JSON instead of the text summary. |
 | `--timeout` | `60s` | Per-request timeout. |
 
 > Each invocation sends `--warmup` + `--runs` requests (6 by default), so it
@@ -122,6 +124,16 @@ run counts.
 (labeled `exact`). If a server omits it, tokps estimates from the streamed
 text length at ~4 chars/token (labeled `estimated`) — model-agnostic and
 independent of how the server chose to chunk the stream.
+
+### Detail and JSON output
+
+`--detail` adds an **inter-token latency (ITL)** line — the p50 and p95 of the
+gaps between successive streamed tokens, pooled across runs. p95 surfaces
+stalls/jitter that a single averaged rate hides.
+
+`--json` emits the full result as machine-readable JSON instead of the text
+table — the p50/min/max for every metric, ITL, and a `runs_detail` array with
+each run's raw numbers — for CI gates, storing, and diffing over time.
 
 ### Reasoning models
 

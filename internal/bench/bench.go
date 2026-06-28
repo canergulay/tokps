@@ -163,6 +163,8 @@ func runStreaming(resp *http.Response, cfg Config, host string, tSend time.Time,
 			t := now()
 			if tFirst.IsZero() {
 				tFirst = t
+			} else {
+				res.ITL = append(res.ITL, t.Sub(tLast))
 			}
 			tLast = t
 			textRunes += runes

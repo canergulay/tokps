@@ -12,7 +12,8 @@ type Result struct {
 	TTFT         time.Duration
 	GenTime      time.Duration // last content token - first content token
 	TotalWall    time.Duration
-	Streamed     bool // false when the non-streaming fallback was used
+	Streamed     bool            // false when the non-streaming fallback was used
+	ITL          []time.Duration // inter-token (inter-chunk) gaps; streaming only, len = tokens-1
 }
 
 // TPS is the headline generation rate over the decode phase. The first token

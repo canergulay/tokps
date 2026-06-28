@@ -128,6 +128,34 @@ func TestRunStreamingCountsReasoningContentTiming(t *testing.T) {
 	}
 }
 
+func TestRunStreamingRecordsInterTokenLatencies(t *testing.T) {
+	ts := sseServer(t, []string{
+		`{"choices":[{"delta":{"content":"a"}}]}`,
+		`{"choices":[{"delta":{"content":"b"}}]}`,
+		`{"choices":[{"delta":{"content":"c"}}]}`,
+		`{"choices":[{"delta":{}}],"usage":{"prompt_tokens":1,"completion_tokens":3}}`,
+	})
+	defer ts.Close()
+
+	cfg := testConfig(ts.URL)
+	cfg.Now = fakeClock(time.Second)
+
+	res, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	// Text tokens arrive at 1s, 2s, 3s -> two 1s inter-token gaps.
+	want := []time.Duration{time.Second, time.Second}
+	if len(res.ITL) != len(want) {
+		t.Fatalf("ITL = %v, want %v", res.ITL, want)
+	}
+	for i := range want {
+		if res.ITL[i] != want[i] {
+			t.Errorf("ITL[%d] = %v, want %v", i, res.ITL[i], want[i])
+		}
+	}
+}
+
 func TestRunStreamingReasoningNoUsageEstimatesFromChars(t *testing.T) {
 	// Reasoning tokens count toward the estimate too: 16 runes / 4 = 4.
 	ts := sseServer(t, []string{
