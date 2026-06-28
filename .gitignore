@@ -1,5 +1,5 @@
 # Go
-/tokencounter
+/tokps
 *.test
 /dist/
 

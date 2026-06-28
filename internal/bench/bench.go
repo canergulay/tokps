@@ -6,12 +6,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
-	"github.com/canergulay/tokencounter/internal/sse"
+	"github.com/canergulay/tokps/internal/sse"
 )
+
+// avgCharsPerToken is the rule-of-thumb ratio used to estimate token counts
+// when the server omits a usage block. ~4 chars/token is OpenAI's documented
+// heuristic for English text — model-agnostic and independent of how the
+// server chose to chunk the stream, unlike counting SSE events.
+const avgCharsPerToken = 4
+
+// estimateTokens approximates a token count from a rune count.
+func estimateTokens(runes int) int {
+	return int(math.Round(float64(runes) / avgCharsPerToken))
+}
 
 // Config controls a single benchmark run.
 type Config struct {
@@ -129,7 +142,7 @@ func runStreaming(resp *http.Response, cfg Config, host string, tSend time.Time,
 	res := Result{Model: cfg.Model, Host: host, PromptTokens: -1, Streamed: true}
 
 	var tFirst, tLast time.Time
-	chunkCount := 0
+	textRunes := 0
 	var u *usage
 
 	sc := sse.NewScanner(resp.Body)
@@ -141,18 +154,18 @@ func runStreaming(resp *http.Response, cfg Config, host string, tSend time.Time,
 		if chunk.Usage != nil {
 			u = chunk.Usage
 		}
-		hasText := false
+		runes := 0
 		if len(chunk.Choices) > 0 {
 			delta := chunk.Choices[0].Delta
-			hasText = delta.Content != "" || delta.ReasoningContent != ""
+			runes = utf8.RuneCountInString(delta.Content) + utf8.RuneCountInString(delta.ReasoningContent)
 		}
-		if hasText {
+		if runes > 0 {
 			t := now()
 			if tFirst.IsZero() {
 				tFirst = t
 			}
 			tLast = t
-			chunkCount++
+			textRunes += runes
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -165,7 +178,7 @@ func runStreaming(resp *http.Response, cfg Config, host string, tSend time.Time,
 		res.OutputTokens = u.CompletionTokens
 		res.TokensExact = true
 	} else {
-		res.OutputTokens = chunkCount
+		res.OutputTokens = estimateTokens(textRunes)
 		res.TokensExact = false
 	}
 	if !tFirst.IsZero() {
@@ -206,7 +219,7 @@ func runNonStreaming(resp *http.Response, cfg Config, host string, tSend time.Ti
 		if len(cr.Choices) > 0 {
 			content = cr.Choices[0].Message.Content
 		}
-		res.OutputTokens = len(strings.Fields(content))
+		res.OutputTokens = estimateTokens(utf8.RuneCountInString(content))
 		res.TokensExact = false
 	}
 	return res, nil

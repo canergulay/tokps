@@ -1,7 +1,7 @@
 .git
 .github
 dist
-tokencounter
+tokps
 *.test
 docs
 *.md

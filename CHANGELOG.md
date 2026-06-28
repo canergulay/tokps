@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Generation TPS now uses the standard `(output_tokens - 1) / generation_time`
+  definition. The first token is produced during TTFT, so the generation window
+  spans N-1 token intervals; the previous formula divided by N and slightly
+  overstated throughput (matters most for short outputs). Matches vLLM, NVIDIA
+  genai-perf, and Anyscale llmperf.
+- The `estimated` token fallback (used when a server omits `usage`) now
+  approximates tokens from text length at ~4 chars/token instead of counting SSE
+  chunks, which depended on the server's arbitrary chunking.
+
+### Added
+- Warmup + repeated measurement: `--runs` (default 5) timed requests after
+  `--warmup` (default 1) discarded ones, reported as median (p50) plus the
+  observed min–max range, so a single cold start or network hiccup doesn't skew
+  the number. Use `--runs 1 --warmup 0` for a single cheap request.
+
 ## [0.1.0] - 2026-06-28
 
 ### Added
@@ -24,5 +40,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallback.
 - `--version` flag.
 
-[Unreleased]: https://github.com/canergulay/tokencounter/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/canergulay/tokencounter/releases/tag/v0.1.0
+[Unreleased]: https://github.com/canergulay/tokps/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/canergulay/tokps/releases/tag/v0.1.0

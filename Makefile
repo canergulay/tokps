@@ -1,4 +1,4 @@
-BINARY  := tokencounter
+BINARY  := tokps
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 GOFILES := $(shell find . -name '*.go' -not -path './vendor/*')

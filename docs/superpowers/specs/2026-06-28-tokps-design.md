@@ -1,11 +1,11 @@
-# tokencounter — OpenAI-compatible TPS benchmark CLI
+# tokps — OpenAI-compatible TPS benchmark CLI
 
 **Date:** 2026-06-28
 **Status:** Approved design
 
 ## Summary
 
-`tokencounter` is a single-shot Go CLI that measures the token-generation
+`tokps` is a single-shot Go CLI that measures the token-generation
 throughput (tokens per second) of any OpenAI-compatible `/chat/completions`
 endpoint. You run it once; it sends a test prompt with streaming enabled,
 watches the tokens stream back, prints a TPS summary, and exits.
@@ -36,8 +36,8 @@ GLM/Zhipu, local models, custom gateways).
 
 ```sh
 export OPENAI_API_KEY=sk-...
-tokencounter --url https://api.openai.com/v1 --model gpt-4o-mini
-tokencounter --url https://open.bigmodel.cn/api/paas/v4 --model glm-4-flash
+tokps --url https://api.openai.com/v1 --model gpt-4o-mini
+tokps --url https://open.bigmodel.cn/api/paas/v4 --model glm-4-flash
 ```
 
 ### Flags
@@ -142,7 +142,7 @@ report.Format(Result) → stdout
 ## Example output
 
 ```
-tokencounter — glm-4-flash @ open.bigmodel.cn
+tokps — glm-4-flash @ open.bigmodel.cn
 
   prompt tokens     14
   output tokens     487   (exact)
@@ -180,7 +180,7 @@ No real API access is required for the test suite.
 ## Project layout
 
 ```
-tokencounter/
+tokps/
   go.mod
   main.go
   internal/
@@ -194,5 +194,5 @@ tokencounter/
     report/
       report.go
       report_test.go
-  docs/superpowers/specs/2026-06-28-tokencounter-design.md
+  docs/superpowers/specs/2026-06-28-tokps-design.md
 ```

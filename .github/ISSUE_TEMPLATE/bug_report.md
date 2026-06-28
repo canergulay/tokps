@@ -11,7 +11,7 @@ A clear description of the bug.
 
 **Command you ran** (redact your API key)
 ```sh
-tokencounter --url ... --model ...
+tokps --url ... --model ...
 ```
 
 **Output you got vs. expected**
@@ -31,6 +31,6 @@ curl -s <url>/chat/completions -H "Authorization: Bearer $API_KEY" \
 ```
 
 **Environment**
-- tokencounter version (`tokencounter --version`):
+- tokps version (`tokps --version`):
 - Go version (`go version`):
 - OS:

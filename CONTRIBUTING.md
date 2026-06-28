@@ -1,13 +1,13 @@
-# Contributing to tokencounter
+# Contributing to tokps
 
-Thanks for your interest in improving tokencounter! Contributions of all kinds
+Thanks for your interest in improving tokps! Contributions of all kinds
 are welcome — bug reports, feature ideas, and pull requests.
 
 ## Getting started
 
 ```sh
-git clone https://github.com/canergulay/tokencounter
-cd tokencounter
+git clone https://github.com/canergulay/tokps
+cd tokps
 go build ./...
 go test ./...
 ```

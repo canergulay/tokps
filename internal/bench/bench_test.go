@@ -60,11 +60,13 @@ func TestRunStreamingUsesUsageWhenPresent(t *testing.T) {
 	}
 }
 
-func TestRunStreamingEstimatesFromChunksWhenNoUsage(t *testing.T) {
+func TestRunStreamingEstimatesFromCharsWhenNoUsage(t *testing.T) {
+	// Two chunks but 24 runes of text. Counting chunks would say 2; the
+	// chars-per-token estimate (24/4) says 6, independent of how the server
+	// chose to chunk the stream.
 	ts := sseServer(t, []string{
-		`{"choices":[{"delta":{"content":"a"}}]}`,
-		`{"choices":[{"delta":{"content":"b"}}]}`,
-		`{"choices":[{"delta":{"content":"c"}}]}`,
+		`{"choices":[{"delta":{"content":"Hello world!"}}]}`,
+		`{"choices":[{"delta":{"content":"Goodbye now!"}}]}`,
 	})
 	defer ts.Close()
 
@@ -75,8 +77,8 @@ func TestRunStreamingEstimatesFromChunksWhenNoUsage(t *testing.T) {
 	if res.TokensExact {
 		t.Errorf("TokensExact = true, want false")
 	}
-	if res.OutputTokens != 3 {
-		t.Errorf("OutputTokens = %d, want 3 (one per content chunk)", res.OutputTokens)
+	if res.OutputTokens != 6 {
+		t.Errorf("OutputTokens = %d, want 6 (24 runes / 4)", res.OutputTokens)
 	}
 }
 
@@ -126,10 +128,11 @@ func TestRunStreamingCountsReasoningContentTiming(t *testing.T) {
 	}
 }
 
-func TestRunStreamingReasoningNoUsageEstimatesChunks(t *testing.T) {
+func TestRunStreamingReasoningNoUsageEstimatesFromChars(t *testing.T) {
+	// Reasoning tokens count toward the estimate too: 16 runes / 4 = 4.
 	ts := sseServer(t, []string{
-		`{"choices":[{"delta":{"reasoning_content":"a"}}]}`,
-		`{"choices":[{"delta":{"reasoning_content":"b"}}]}`,
+		`{"choices":[{"delta":{"reasoning_content":"abcdefgh"}}]}`,
+		`{"choices":[{"delta":{"reasoning_content":"ijklmnop"}}]}`,
 	})
 	defer ts.Close()
 
@@ -140,8 +143,8 @@ func TestRunStreamingReasoningNoUsageEstimatesChunks(t *testing.T) {
 	if res.TokensExact {
 		t.Errorf("TokensExact = true, want false")
 	}
-	if res.OutputTokens != 2 {
-		t.Errorf("OutputTokens = %d, want 2", res.OutputTokens)
+	if res.OutputTokens != 4 {
+		t.Errorf("OutputTokens = %d, want 4 (16 runes / 4)", res.OutputTokens)
 	}
 }
 

@@ -10,10 +10,10 @@ RUN go mod download
 
 COPY . .
 ARG VERSION=docker
-RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /tokencounter .
+RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /tokps .
 
 # --- runtime stage ---
 # distroless/static ships CA certificates, so outbound HTTPS works.
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /tokencounter /usr/local/bin/tokencounter
-ENTRYPOINT ["tokencounter"]
+COPY --from=build /tokps /usr/local/bin/tokps
+ENTRYPOINT ["tokps"]

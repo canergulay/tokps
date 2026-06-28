@@ -15,12 +15,14 @@ type Result struct {
 	Streamed     bool // false when the non-streaming fallback was used
 }
 
-// TPS is the headline generation rate (output tokens per second of
-// generation time). It falls back to the end-to-end rate when generation
-// time is unavailable.
+// TPS is the headline generation rate over the decode phase. The first token
+// is produced during TTFT, so the (tLast-tFirst) window spans N-1 token
+// intervals; dividing by OutputTokens-1 matches the standard serving-benchmark
+// definition (vLLM, NVIDIA genai-perf, Anyscale llmperf). It falls back to the
+// end-to-end rate when the generation interval is unavailable.
 func (r Result) TPS() float64 {
-	if r.GenTime > 0 {
-		return float64(r.OutputTokens) / r.GenTime.Seconds()
+	if r.GenTime > 0 && r.OutputTokens > 1 {
+		return float64(r.OutputTokens-1) / r.GenTime.Seconds()
 	}
 	return r.EndToEndTPS()
 }

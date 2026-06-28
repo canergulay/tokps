@@ -1,4 +1,4 @@
-// Command tokencounter benchmarks the token-generation throughput of an
+// Command tokps benchmarks the token-generation throughput of an
 // OpenAI-compatible /chat/completions endpoint.
 package main
 
@@ -9,8 +9,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/canergulay/tokencounter/internal/bench"
-	"github.com/canergulay/tokencounter/internal/report"
+	"github.com/canergulay/tokps/internal/bench"
+	"github.com/canergulay/tokps/internal/report"
 )
 
 const defaultPrompt = "Write a detailed explanation of how TCP congestion control works, " +
@@ -25,12 +25,14 @@ func main() {
 	apiKey := flag.String("api-key", "", "API key (defaults to the API_KEY env var, then OPENAI_API_KEY)")
 	prompt := flag.String("prompt", defaultPrompt, "Test prompt to send")
 	maxTokens := flag.Int("max-tokens", 512, "Maximum output tokens")
-	timeout := flag.Duration("timeout", 60*time.Second, "Whole-request timeout")
+	timeout := flag.Duration("timeout", 60*time.Second, "Per-request timeout")
+	runs := flag.Int("runs", 5, "Number of timed runs (reports p50 + min–max across them)")
+	warmup := flag.Int("warmup", 1, "Number of discarded warmup runs before measuring")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Println("tokencounter", version)
+		fmt.Println("tokps", version)
 		return
 	}
 
@@ -57,10 +59,10 @@ func main() {
 		Timeout:   *timeout,
 	}
 
-	res, err := bench.Run(context.Background(), cfg)
+	sum, err := bench.RunN(context.Background(), cfg, *runs, *warmup)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	report.Format(os.Stdout, res)
+	report.FormatSummary(os.Stdout, sum)
 }

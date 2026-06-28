@@ -1,0 +1,93 @@
+package bench
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestPercentileInterpolates(t *testing.T) {
+	vals := []float64{50, 10, 30, 20, 40} // unsorted on purpose
+	cases := []struct {
+		p    float64
+		want float64
+	}{
+		{0.0, 10},
+		{0.5, 30},
+		{0.9, 46}, // between 40 and 50, 60% of the way
+		{1.0, 50},
+	}
+	for _, c := range cases {
+		if got := percentile(vals, c.p); got != c.want {
+			t.Errorf("percentile(%.2f) = %v, want %v", c.p, got, c.want)
+		}
+	}
+}
+
+func TestPercentileEdgeCases(t *testing.T) {
+	if got := percentile(nil, 0.5); got != 0 {
+		t.Errorf("percentile(nil) = %v, want 0", got)
+	}
+	if got := percentile([]float64{42}, 0.9); got != 42 {
+		t.Errorf("percentile(single) = %v, want 42", got)
+	}
+}
+
+func TestSummaryStatsReportMedianAndRange(t *testing.T) {
+	s := Summary{Results: []Result{
+		{OutputTokens: 100, GenTime: 2 * time.Second, TotalWall: 4 * time.Second, TTFT: 1 * time.Second, PromptTokens: 12, TokensExact: true},
+		{OutputTokens: 100, GenTime: 4 * time.Second, TotalWall: 8 * time.Second, TTFT: 3 * time.Second, PromptTokens: 12, TokensExact: true},
+	}}
+	// TPS values: 99/2=49.5 and 99/4=24.75. p50 is the midpoint; min/max the ends.
+	tps := s.GenTPS()
+	if tps.P50 != 37.125 || tps.Min != 24.75 || tps.Max != 49.5 {
+		t.Errorf("GenTPS = %+v, want {Min:24.75 P50:37.125 Max:49.5}", tps)
+	}
+	// TTFT seconds: 1 and 3 -> p50 = 2, range 1..3.
+	ttft := s.TTFT()
+	if ttft.P50 != 2 || ttft.Min != 1 || ttft.Max != 3 {
+		t.Errorf("TTFT = %+v, want {Min:1 P50:2 Max:3}", ttft)
+	}
+	if !s.Exact() {
+		t.Errorf("Exact = false, want true")
+	}
+	if got := s.PromptTokens(); got != 12 {
+		t.Errorf("PromptTokens = %d, want 12", got)
+	}
+}
+
+func TestRunNDiscardsWarmupKeepsMeasuredRuns(t *testing.T) {
+	var calls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, _ := w.(http.Flusher)
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":5}}\n\n"))
+		w.Write([]byte("data: [DONE]\n\n"))
+		if fl != nil {
+			fl.Flush()
+		}
+	}))
+	defer ts.Close()
+
+	sum, err := RunN(context.Background(), testConfig(ts.URL), 2, 1)
+	if err != nil {
+		t.Fatalf("RunN error: %v", err)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Errorf("server calls = %d, want 3 (1 warmup + 2 measured)", got)
+	}
+	if len(sum.Results) != 2 {
+		t.Errorf("kept results = %d, want 2", len(sum.Results))
+	}
+	if sum.Warmup != 1 {
+		t.Errorf("Warmup = %d, want 1", sum.Warmup)
+	}
+	if sum.Model != "test-model" {
+		t.Errorf("Model = %q, want test-model", sum.Model)
+	}
+}
