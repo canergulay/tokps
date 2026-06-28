@@ -63,13 +63,15 @@ func main() {
 		Timeout:   *timeout,
 	}
 
+	ctx := context.Background()
+
 	if *sweep != "" {
 		levels, err := bench.ParseLevels(*sweep)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(2)
 		}
-		sums, err := bench.RunSweep(context.Background(), cfg, *runs, *warmup, levels)
+		sums, err := bench.RunSweep(ctx, cfg, *runs, *warmup, levels)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -85,7 +87,7 @@ func main() {
 		return
 	}
 
-	sum, err := bench.RunN(context.Background(), cfg, *runs, *warmup, *concurrency)
+	sum, err := bench.RunN(ctx, cfg, *runs, *warmup, *concurrency)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

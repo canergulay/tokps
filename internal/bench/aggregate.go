@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -152,17 +153,17 @@ func runBatch(ctx context.Context, cfg Config, concurrency int, now func() time.
 	return results, agg, nil
 }
 
-// TTFT returns p50/p90 of time-to-first-token, in seconds.
+// TTFT returns the min/p50/max of time-to-first-token, in seconds.
 func (s Summary) TTFT() Stat {
 	return s.stat(func(r Result) float64 { return r.TTFT.Seconds() })
 }
 
-// GenTPS returns p50/p90 of the generation rate (tokens/sec).
+// GenTPS returns the min/p50/max of the generation rate (tokens/sec).
 func (s Summary) GenTPS() Stat {
 	return s.stat(func(r Result) float64 { return r.TPS() })
 }
 
-// E2ETPS returns p50/p90 of the end-to-end rate (tokens/sec, incl. TTFT).
+// E2ETPS returns the min/p50/max of the end-to-end rate (tokens/sec, incl. TTFT).
 func (s Summary) E2ETPS() Stat {
 	return s.stat(func(r Result) float64 { return r.EndToEndTPS() })
 }
@@ -171,11 +172,7 @@ func (s Summary) E2ETPS() Stat {
 // (total output tokens across all concurrent streams ÷ batch wall time). It is
 // meaningful only under concurrency > 1.
 func (s Summary) AggregateTPS() Stat {
-	return Stat{
-		Min: percentile(s.BatchTPS, 0),
-		P50: percentile(s.BatchTPS, 0.50),
-		Max: percentile(s.BatchTPS, 1),
-	}
+	return statOf(s.BatchTPS)
 }
 
 // ITL pools the inter-token gaps from every measured run and returns their p50
@@ -191,7 +188,8 @@ func (s Summary) ITL() (p50ms, p95ms float64, ok bool) {
 	if len(gaps) == 0 {
 		return 0, 0, false
 	}
-	return percentile(gaps, 0.50), percentile(gaps, 0.95), true
+	sort.Float64s(gaps)
+	return percentileSorted(gaps, 0.50), percentileSorted(gaps, 0.95), true
 }
 
 // MedianOutputTokens returns the median output-token count across runs.
@@ -227,39 +225,67 @@ func (s Summary) PromptTokens() int {
 	return s.Results[0].PromptTokens
 }
 
+// RunCount returns the number of measured runs (batches) — one per BatchTPS
+// sample. It falls back to the per-stream count for summaries built without
+// batch data (e.g. directly in tests).
+func (s Summary) RunCount() int {
+	if len(s.BatchTPS) > 0 {
+		return len(s.BatchTPS)
+	}
+	return len(s.Results)
+}
+
 func (s Summary) stat(sel func(Result) float64) Stat {
 	vals := make([]float64, len(s.Results))
 	for i, r := range s.Results {
 		vals[i] = sel(r)
 	}
+	return statOf(vals)
+}
+
+// statOf sorts a copy of vals once and returns its min, median, and max.
+func statOf(vals []float64) Stat {
+	if len(vals) == 0 {
+		return Stat{}
+	}
+	sorted := slices.Clone(vals)
+	sort.Float64s(sorted)
 	return Stat{
-		Min: percentile(vals, 0),
-		P50: percentile(vals, 0.50),
-		Max: percentile(vals, 1),
+		Min: sorted[0],
+		P50: percentileSorted(sorted, 0.50),
+		Max: sorted[len(sorted)-1],
 	}
 }
 
-// percentile returns the p-th percentile (p in [0,1]) of vals using linear
-// interpolation between closest ranks — the "type 7" method used by NumPy and
-// Excel's PERCENTILE.INC. vals need not be sorted.
+// percentile returns the p-th percentile of vals; it sorts a copy first.
 func percentile(vals []float64, p float64) float64 {
-	n := len(vals)
+	if len(vals) == 0 {
+		return 0
+	}
+	sorted := slices.Clone(vals)
+	sort.Float64s(sorted)
+	return percentileSorted(sorted, p)
+}
+
+// percentileSorted returns the p-th percentile (p in [0,1]) of an already
+// sorted slice, using linear interpolation between closest ranks — the
+// "type 7" method used by NumPy and Excel's PERCENTILE.INC.
+func percentileSorted(sorted []float64, p float64) float64 {
+	n := len(sorted)
 	if n == 0 {
 		return 0
 	}
-	s := append([]float64(nil), vals...)
-	sort.Float64s(s)
 	if n == 1 || p <= 0 {
-		return s[0]
+		return sorted[0]
 	}
 	if p >= 1 {
-		return s[n-1]
+		return sorted[n-1]
 	}
 	rank := p * float64(n-1)
 	lo := int(math.Floor(rank))
 	hi := int(math.Ceil(rank))
 	if lo == hi {
-		return s[lo]
+		return sorted[lo]
 	}
-	return s[lo] + (rank-float64(lo))*(s[hi]-s[lo])
+	return sorted[lo] + (rank-float64(lo))*(sorted[hi]-sorted[lo])
 }

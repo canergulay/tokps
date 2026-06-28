@@ -56,9 +56,9 @@ func FormatSummary(w io.Writer, s bench.Summary, detail bool) {
 
 	conc := s.Concurrency > 1
 	if conc {
-		fmt.Fprintf(w, "\ntokps — %s @ %s  (concurrency %d, %d runs, %d warmup)\n\n", s.Model, s.Host, s.Concurrency, len(s.BatchTPS), s.Warmup)
+		fmt.Fprintf(w, "\ntokps — %s @ %s  (concurrency %d, %d runs, %d warmup)\n\n", s.Model, s.Host, s.Concurrency, s.RunCount(), s.Warmup)
 	} else {
-		fmt.Fprintf(w, "\ntokps — %s @ %s  (%d runs, %d warmup)\n\n", s.Model, s.Host, len(s.Results), s.Warmup)
+		fmt.Fprintf(w, "\ntokps — %s @ %s  (%d runs, %d warmup)\n\n", s.Model, s.Host, s.RunCount(), s.Warmup)
 	}
 
 	if pt := s.PromptTokens(); pt >= 0 {
@@ -126,11 +126,6 @@ func FormatJSON(w io.Writer, s bench.Summary) error {
 		E2ETPS       float64 `json:"e2e_tps"`
 	}
 
-	// Number of measured runs (batches) — one aggregate sample per run.
-	runCount := len(s.BatchTPS)
-	if runCount == 0 {
-		runCount = len(s.Results)
-	}
 	ttft, gen, e2e := s.TTFT(), s.GenTPS(), s.E2ETPS()
 	out := struct {
 		Model              string `json:"model"`
@@ -149,7 +144,7 @@ func FormatJSON(w io.Writer, s bench.Summary) error {
 		ITLMillis          *itl   `json:"itl_ms,omitempty"`
 		RunsDetail         []run  `json:"runs_detail"`
 	}{
-		Model: s.Model, Host: s.Host, Runs: runCount, Warmup: s.Warmup,
+		Model: s.Model, Host: s.Host, Runs: s.RunCount(), Warmup: s.Warmup,
 		Concurrency:  max(s.Concurrency, 1),
 		PromptTokens: s.PromptTokens(), OutputTokensMedian: s.MedianOutputTokens(),
 		TokensExact: s.Exact(), Streamed: s.Streamed(),
@@ -182,7 +177,7 @@ func FormatSweep(w io.Writer, sums []bench.Summary) {
 	if len(sums) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "\ntokps — %s @ %s  (sweep, %d runs, %d warmup)\n\n", sums[0].Model, sums[0].Host, len(sums[0].BatchTPS), sums[0].Warmup)
+	fmt.Fprintf(w, "\ntokps — %s @ %s  (sweep, %d runs, %d warmup)\n\n", sums[0].Model, sums[0].Host, sums[0].RunCount(), sums[0].Warmup)
 	fmt.Fprintf(w, "  %-11s   %-15s   %-8s   %s\n", "concurrency", "aggregate tok/s", "TTFT p50", "TPS p50/stream")
 	for _, s := range sums {
 		fmt.Fprintf(w, "  %-11d   %-15.1f   %-8s   %.1f\n", s.Concurrency, s.AggregateTPS().P50, secs(s.TTFT().P50), s.GenTPS().P50)
