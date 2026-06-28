@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `estimated` token fallback (used when a server omits `usage`) now
   approximates tokens from text length at ~4 chars/token instead of counting SSE
   chunks, which depended on the server's arbitrary chunking.
+- Under `--concurrency` / `--sweep`, all streams now share one connection pool
+  sized to the concurrency level, so warmup pre-establishes every connection the
+  measured runs reuse. Previously the default two-idle-connections-per-host limit
+  meant high-concurrency batches paid TCP/TLS setup that warmup is meant to
+  absorb, skewing the numbers.
 
 ### Added
 - Warmup + repeated measurement: `--runs` (default 5) timed requests after

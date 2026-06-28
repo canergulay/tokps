@@ -48,6 +48,11 @@ func RunN(ctx context.Context, cfg Config, runs, warmup, concurrency int) (Summa
 	if now == nil {
 		now = time.Now
 	}
+	if cfg.Client == nil {
+		// One pooled client shared by warmup and every measured stream, so
+		// warmup can establish the connections the timed runs reuse.
+		cfg.Client = poolingClient(concurrency)
+	}
 	for i := range warmup {
 		if _, _, err := runBatch(ctx, cfg, concurrency, now); err != nil {
 			return Summary{}, fmt.Errorf("warmup batch %d: %w", i+1, err)
@@ -255,16 +260,6 @@ func statOf(vals []float64) Stat {
 		P50: percentileSorted(sorted, 0.50),
 		Max: sorted[len(sorted)-1],
 	}
-}
-
-// percentile returns the p-th percentile of vals; it sorts a copy first.
-func percentile(vals []float64, p float64) float64 {
-	if len(vals) == 0 {
-		return 0
-	}
-	sorted := slices.Clone(vals)
-	sort.Float64s(sorted)
-	return percentileSorted(sorted, p)
 }
 
 // percentileSorted returns the p-th percentile (p in [0,1]) of an already

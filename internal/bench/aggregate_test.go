@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-func TestPercentileInterpolates(t *testing.T) {
-	vals := []float64{50, 10, 30, 20, 40} // unsorted on purpose
+func TestPercentileSortedInterpolates(t *testing.T) {
+	sorted := []float64{10, 20, 30, 40, 50}
 	cases := []struct {
 		p    float64
 		want float64
@@ -21,18 +21,18 @@ func TestPercentileInterpolates(t *testing.T) {
 		{1.0, 50},
 	}
 	for _, c := range cases {
-		if got := percentile(vals, c.p); got != c.want {
-			t.Errorf("percentile(%.2f) = %v, want %v", c.p, got, c.want)
+		if got := percentileSorted(sorted, c.p); got != c.want {
+			t.Errorf("percentileSorted(%.2f) = %v, want %v", c.p, got, c.want)
 		}
 	}
 }
 
-func TestPercentileEdgeCases(t *testing.T) {
-	if got := percentile(nil, 0.5); got != 0 {
-		t.Errorf("percentile(nil) = %v, want 0", got)
+func TestPercentileSortedEdgeCases(t *testing.T) {
+	if got := percentileSorted(nil, 0.5); got != 0 {
+		t.Errorf("percentileSorted(nil) = %v, want 0", got)
 	}
-	if got := percentile([]float64{42}, 0.9); got != 42 {
-		t.Errorf("percentile(single) = %v, want 42", got)
+	if got := percentileSorted([]float64{42}, 0.9); got != 42 {
+		t.Errorf("percentileSorted(single) = %v, want 42", got)
 	}
 }
 

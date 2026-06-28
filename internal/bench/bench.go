@@ -82,6 +82,19 @@ type chatResponse struct {
 	Usage *usage `json:"usage"`
 }
 
+// poolingClient returns an HTTP client whose idle-connection pool is sized for
+// `concurrency` parallel streams. http.DefaultTransport keeps only two idle
+// connections per host, so under load warmup could not pre-establish every
+// connection the measured runs reuse, and the measured batches would pay TCP/TLS
+// setup that warmup is meant to absorb. Sizing the pool to the stream count
+// keeps the documented steady-state guarantee true under concurrency.
+func poolingClient(concurrency int) *http.Client {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConns = 0 // no global cap; bound per-host instead
+	t.MaxIdleConnsPerHost = concurrency
+	return &http.Client{Transport: t}
+}
+
 // Run sends a streaming chat-completions request and returns timing and
 // token-throughput metrics.
 func Run(ctx context.Context, cfg Config) (Result, error) {
