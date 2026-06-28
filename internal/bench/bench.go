@@ -51,6 +51,10 @@ type streamChunk struct {
 	Choices []struct {
 		Delta struct {
 			Content string `json:"content"`
+			// ReasoningContent carries thinking-mode tokens for reasoning
+			// models (e.g. GLM-5.2, DeepSeek-R1). These are generated
+			// tokens and count toward throughput.
+			ReasoningContent string `json:"reasoning_content"`
 		} `json:"delta"`
 	} `json:"choices"`
 	Usage *usage `json:"usage"`
@@ -137,11 +141,12 @@ func runStreaming(resp *http.Response, cfg Config, host string, tSend time.Time,
 		if chunk.Usage != nil {
 			u = chunk.Usage
 		}
-		content := ""
+		hasText := false
 		if len(chunk.Choices) > 0 {
-			content = chunk.Choices[0].Delta.Content
+			delta := chunk.Choices[0].Delta
+			hasText = delta.Content != "" || delta.ReasoningContent != ""
 		}
-		if content != "" {
+		if hasText {
 			t := now()
 			if tFirst.IsZero() {
 				tFirst = t

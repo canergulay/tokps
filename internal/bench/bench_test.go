@@ -80,6 +80,71 @@ func TestRunStreamingEstimatesFromChunksWhenNoUsage(t *testing.T) {
 	}
 }
 
+// fakeClock returns a now() function that advances by step on every call,
+// starting at the Unix epoch. Deterministic timing for tests.
+func fakeClock(step time.Duration) func() time.Time {
+	base := time.Unix(0, 0)
+	var n int64
+	return func() time.Time {
+		t := base.Add(time.Duration(n) * step)
+		n++
+		return t
+	}
+}
+
+// GLM-5.2 and other reasoning models stream generated tokens in
+// delta.reasoning_content rather than delta.content. Those tokens must count
+// toward timing and throughput.
+func TestRunStreamingCountsReasoningContentTiming(t *testing.T) {
+	ts := sseServer(t, []string{
+		`{"choices":[{"delta":{"reasoning_content":"a"}}]}`,
+		`{"choices":[{"delta":{"reasoning_content":"b"}}]}`,
+		`{"choices":[{"delta":{"reasoning_content":"c"}}]}`,
+		`{"choices":[{"delta":{}}],"usage":{"prompt_tokens":9,"completion_tokens":30}}`,
+	})
+	defer ts.Close()
+
+	cfg := testConfig(ts.URL)
+	cfg.Now = fakeClock(time.Second)
+
+	res, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if !res.Streamed {
+		t.Errorf("Streamed = false, want true")
+	}
+	if res.OutputTokens != 30 || !res.TokensExact {
+		t.Errorf("got OutputTokens=%d exact=%v, want 30/true", res.OutputTokens, res.TokensExact)
+	}
+	// tSend=0s, first reasoning token at 1s, last at 3s.
+	if res.TTFT != time.Second {
+		t.Errorf("TTFT = %v, want 1s", res.TTFT)
+	}
+	if res.GenTime != 2*time.Second {
+		t.Errorf("GenTime = %v, want 2s", res.GenTime)
+	}
+}
+
+func TestRunStreamingReasoningNoUsageEstimatesChunks(t *testing.T) {
+	ts := sseServer(t, []string{
+		`{"choices":[{"delta":{"reasoning_content":"a"}}]}`,
+		`{"choices":[{"delta":{"reasoning_content":"b"}}]}`,
+	})
+	defer ts.Close()
+
+	res, err := Run(context.Background(), testConfig(ts.URL))
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if res.TokensExact {
+		t.Errorf("TokensExact = true, want false")
+	}
+	if res.OutputTokens != 2 {
+		t.Errorf("OutputTokens = %d, want 2", res.OutputTokens)
+	}
+}
+
 func TestRunReturnsErrorOnNon2xx(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"boom"}`, http.StatusInternalServerError)
