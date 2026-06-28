@@ -1,0 +1,7 @@
+# Go
+/tokencounter
+*.test
+/dist/
+
+# Editor
+.DS_Store
