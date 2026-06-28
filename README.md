@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="tokps logo" width="128" height="128">
+</p>
+
 # tokps
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/canergulay/tokps.svg)](https://pkg.go.dev/github.com/canergulay/tokps)
