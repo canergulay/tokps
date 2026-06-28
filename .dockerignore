@@ -1,0 +1,9 @@
+.git
+.github
+dist
+tokencounter
+*.test
+docs
+*.md
+Makefile
+.editorconfig

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"tokencounter/internal/sse"
+	"github.com/canergulay/tokencounter/internal/sse"
 )
 
 // Config controls a single benchmark run.

@@ -6,7 +6,7 @@ import "time"
 type Result struct {
 	Model        string
 	Host         string
-	PromptTokens int  // -1 when unknown
+	PromptTokens int // -1 when unknown
 	OutputTokens int
 	TokensExact  bool // true when from usage, false when estimated from chunks
 	TTFT         time.Duration

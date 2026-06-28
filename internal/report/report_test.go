@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"tokencounter/internal/bench"
+	"github.com/canergulay/tokencounter/internal/bench"
 )
 
 func TestFormatStreamingExact(t *testing.T) {

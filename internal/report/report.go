@@ -6,7 +6,7 @@ import (
 	"io"
 	"time"
 
-	"tokencounter/internal/bench"
+	"github.com/canergulay/tokencounter/internal/bench"
 )
 
 // Format writes a human-readable summary of r to w.

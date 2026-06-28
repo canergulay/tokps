@@ -9,12 +9,15 @@ import (
 	"os"
 	"time"
 
-	"tokencounter/internal/bench"
-	"tokencounter/internal/report"
+	"github.com/canergulay/tokencounter/internal/bench"
+	"github.com/canergulay/tokencounter/internal/report"
 )
 
 const defaultPrompt = "Write a detailed explanation of how TCP congestion control works, " +
 	"covering slow start, congestion avoidance, fast retransmit, and fast recovery."
+
+// version is overridden at build time via -ldflags "-X main.version=...".
+var version = "dev"
 
 func main() {
 	url := flag.String("url", "", "Base URL of the OpenAI-compatible endpoint (required)")
@@ -23,7 +26,13 @@ func main() {
 	prompt := flag.String("prompt", defaultPrompt, "Test prompt to send")
 	maxTokens := flag.Int("max-tokens", 512, "Maximum output tokens")
 	timeout := flag.Duration("timeout", 60*time.Second, "Whole-request timeout")
+	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("tokencounter", version)
+		return
+	}
 
 	if *url == "" || *model == "" {
 		fmt.Fprintln(os.Stderr, "error: --url and --model are required")
