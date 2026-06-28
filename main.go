@@ -19,7 +19,7 @@ const defaultPrompt = "Write a detailed explanation of how TCP congestion contro
 func main() {
 	url := flag.String("url", "", "Base URL of the OpenAI-compatible endpoint (required)")
 	model := flag.String("model", "", "Model name (required)")
-	apiKey := flag.String("api-key", "", "API key (defaults to the OPENAI_API_KEY env var)")
+	apiKey := flag.String("api-key", "", "API key (defaults to the API_KEY env var, then OPENAI_API_KEY)")
 	prompt := flag.String("prompt", defaultPrompt, "Test prompt to send")
 	maxTokens := flag.Int("max-tokens", 512, "Maximum output tokens")
 	timeout := flag.Duration("timeout", 60*time.Second, "Whole-request timeout")
@@ -32,6 +32,9 @@ func main() {
 	}
 
 	key := *apiKey
+	if key == "" {
+		key = os.Getenv("API_KEY")
+	}
 	if key == "" {
 		key = os.Getenv("OPENAI_API_KEY")
 	}

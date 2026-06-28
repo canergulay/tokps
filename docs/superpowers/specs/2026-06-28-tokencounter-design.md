@@ -46,7 +46,7 @@ tokencounter --url https://open.bigmodel.cn/api/paas/v4 --model glm-4-flash
 |----------------|----------|-----------------------------|-------|
 | `--url`        | yes      | —                           | Base URL; `/chat/completions` is appended. A full `…/chat/completions` URL is used as-is. |
 | `--model`      | yes      | —                           | Model name passed in the request body. |
-| `--api-key`    | no       | `OPENAI_API_KEY` env        | Sent as `Authorization: Bearer <key>`. Flag overrides env. Empty is allowed (some local servers need no key). |
+| `--api-key`    | no       | `API_KEY` env, then `OPENAI_API_KEY` | Sent as `Authorization: Bearer <key>`. Provider-agnostic `API_KEY` is preferred so one variable works for any `--url`; `OPENAI_API_KEY` is a fallback. Flag overrides env. Empty is allowed (some local servers need no key). |
 | `--prompt`     | no       | built-in default prompt     | Overrides the default test prompt. |
 | `--max-tokens` | no       | 512                         | Upper bound on output so the response is long enough for a meaningful TPS. |
 | `--timeout`    | no       | 60s                         | Whole-request timeout. |
