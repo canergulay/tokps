@@ -21,6 +21,9 @@ func TestHostOf(t *testing.T) {
 	if got := hostOf("https://open.bigmodel.cn/api/paas/v4"); got != "open.bigmodel.cn" {
 		t.Errorf("hostOf = %q, want open.bigmodel.cn", got)
 	}
+	if got := hostOf("localhost:8000/v1"); got != "localhost:8000" {
+		t.Errorf("hostOf scheme-less = %q, want localhost:8000", got)
+	}
 	if got := hostOf("not a url"); got != "not a url" {
 		t.Errorf("hostOf fallback = %q, want raw string", got)
 	}

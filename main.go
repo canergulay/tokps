@@ -171,6 +171,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "error: --chars-per-token must be > 0")
 		return 2
 	}
+	if opts.timeout <= 0 {
+		fmt.Fprintln(stderr, "error: --timeout must be > 0")
+		return 2
+	}
 
 	key := opts.apiKey
 	if key == "" {
@@ -191,6 +195,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		CostIn:         opts.costIn,
 		CostOut:        opts.costOut,
 		CharsPerToken:  opts.charsPerToken,
+		Warnf: func(format string, args ...any) {
+			fmt.Fprintf(stderr, "warning: "+format+"\n", args...)
+		},
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

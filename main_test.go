@@ -81,6 +81,17 @@ func TestRunRejectsBadCharsPerToken(t *testing.T) {
 	}
 }
 
+func TestRunRejectsNonPositiveTimeout(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := run([]string{"--url=http://x", "--model=m", "--timeout=0s"}, &out, &errb)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+	if !strings.Contains(errb.String(), "--timeout") {
+		t.Errorf("stderr = %q, want it to mention --timeout", errb.String())
+	}
+}
+
 func TestSweepValueDefaults(t *testing.T) {
 	var sv sweepValue
 	if err := sv.Set("true"); err != nil {

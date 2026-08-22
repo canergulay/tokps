@@ -15,9 +15,14 @@ func endpoint(raw string) string {
 }
 
 // hostOf returns the host portion of raw for display, or raw if it cannot
-// be parsed.
+// be parsed. Scheme-less URLs (e.g. "localhost:8000/v1") are parsed as
+// http:// so their host is reported instead of the whole string.
 func hostOf(raw string) string {
-	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+	s := raw
+	if !strings.Contains(s, "://") {
+		s = "http://" + s
+	}
+	if u, err := url.Parse(s); err == nil && u.Host != "" {
 		return u.Host
 	}
 	return raw

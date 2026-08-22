@@ -178,6 +178,55 @@ func TestRunStreamingReasoningNoUsageEstimatesFromChars(t *testing.T) {
 	}
 }
 
+func TestRunStreamingWarnsOnMalformedChunk(t *testing.T) {
+	ts := sseServer(t, []string{
+		`{"choices":[{"delta":{"content":"hi"}}]}`,
+		`this is not json`,
+		`{"choices":[{"delta":{"content":"!"}}]}`,
+		`{"choices":[{"delta":{}}],"usage":{"prompt_tokens":1,"completion_tokens":2}}`,
+	})
+	defer ts.Close()
+
+	cfg := testConfig(ts.URL)
+	var warnings []string
+	cfg.Warnf = func(format string, args ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, args...))
+	}
+
+	res, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if res.OutputTokens != 2 || !res.TokensExact {
+		t.Errorf("got OutputTokens=%d exact=%v, want 2/true", res.OutputTokens, res.TokensExact)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %q, want exactly 1", warnings)
+	}
+	if !strings.Contains(warnings[0], "malformed SSE chunk") {
+		t.Errorf("warning = %q, want it to mention the malformed chunk", warnings[0])
+	}
+}
+
+func TestRunStreamingSilentMalformedChunkWhenNoWarnf(t *testing.T) {
+	// Warnf is optional: without it, malformed chunks are still skipped but
+	// produce no output.
+	ts := sseServer(t, []string{
+		`not json at all`,
+		`{"choices":[{"delta":{"content":"hi"}}]}`,
+		`{"choices":[{"delta":{}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`,
+	})
+	defer ts.Close()
+
+	res, err := Run(context.Background(), testConfig(ts.URL))
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if res.OutputTokens != 1 || !res.TokensExact {
+		t.Errorf("got OutputTokens=%d exact=%v, want 1/true", res.OutputTokens, res.TokensExact)
+	}
+}
+
 func TestRunReturnsErrorOnNon2xx(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"boom"}`, http.StatusInternalServerError)

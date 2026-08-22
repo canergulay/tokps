@@ -40,6 +40,9 @@ type Config struct {
 	Timeout   time.Duration
 	Client    *http.Client     // defaults to &http.Client{} when nil
 	Now       func() time.Time // defaults to time.Now when nil
+	// Warnf, when set, receives non-fatal diagnostics (e.g. SSE chunks that
+	// could not be parsed). Nil silences them.
+	Warnf func(format string, args ...any)
 
 	// MaxTokensField names the request field carrying the output cap:
 	// "max_tokens" (default, OpenAI-compatible) or "max_completion_tokens"
@@ -222,6 +225,9 @@ func runStreaming(resp *http.Response, cfg Config, host string, tSend time.Time,
 	for sc.Scan() {
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(sc.Data()), &chunk); err != nil {
+			if cfg.Warnf != nil {
+				cfg.Warnf("skipping malformed SSE chunk: %v", err)
+			}
 			continue // skip malformed JSON
 		}
 		if chunk.Usage != nil {
