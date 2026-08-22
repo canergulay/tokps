@@ -27,15 +27,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--warmup` (default 1) discarded ones, reported as median (p50) plus the
   observed min–max range, so a single cold start or network hiccup doesn't skew
   the number. Use `--runs 1 --warmup 0` for a single cheap request.
-- `--detail` adds an inter-token latency (ITL) line — p50/p95 of the gaps
-  between successive streamed tokens, pooled across runs, surfacing jitter that
-  an averaged rate hides.
+- `--detail` adds an inter-chunk latency (ITL) line — p50/p95 of the gaps
+  between successive content-bearing SSE chunks, pooled across runs, surfacing
+  jitter that an averaged rate hides.
 - `--json` emits the full result as machine-readable JSON (per-metric
   min/p50/max, ITL, and a `runs_detail` array) for CI gates and diffing.
 - `--concurrency N` fires N parallel streams per run and reports aggregate
   tokens/sec under load alongside the per-stream metrics.
-- `--sweep 1,2,4,8` benchmarks across concurrency levels and prints the
-  throughput-vs-concurrency curve (text or JSON).
+- `--sweep=1,2,4,8` (or a bare `--sweep` for the default `1,2,4,8` curve)
+  benchmarks across concurrency levels and prints the throughput-vs-concurrency
+  curve (text or JSON), now with min–max ranges per level.
+- `--max-tokens-field` selects the output-cap request field
+  (`max_tokens` or `max_completion_tokens`); tokps also retries automatically
+  with `max_completion_tokens` when an endpoint rejects `max_tokens` with a 400.
+- `--cost-in` / `--cost-out` (USD per 1M tokens) add a per-request cost line
+  (median across runs) and a per-run `cost_usd` in JSON output.
+- `--chars-per-token` overrides the ~4 chars/token ratio used by the
+  `estimated` fallback (e.g. ~1.5–2 for CJK text).
+- Graceful Ctrl-C handling: an interrupted benchmark reports how many measured
+  runs completed and exits with code 130 instead of dying silently.
 
 ## [0.1.0] - 2026-06-28
 

@@ -13,7 +13,8 @@ type Result struct {
 	GenTime      time.Duration // last content token - first content token
 	TotalWall    time.Duration
 	Streamed     bool            // false when the non-streaming fallback was used
-	ITL          []time.Duration // inter-token (inter-chunk) gaps; streaming only, len = tokens-1
+	ITL          []time.Duration // inter-event gaps between content-bearing chunks (len = chunks-1)
+	Cost         float64         // estimated per-request cost in USD (0 when not configured)
 }
 
 // TPS is the headline generation rate over the decode phase. The first token

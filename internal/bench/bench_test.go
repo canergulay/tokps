@@ -2,7 +2,9 @@ package bench
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -144,7 +146,7 @@ func TestRunStreamingRecordsInterTokenLatencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run error: %v", err)
 	}
-	// Text tokens arrive at 1s, 2s, 3s -> two 1s inter-token gaps.
+	// Text tokens arrive at 1s, 2s, 3s -> two 1s inter-chunk gaps.
 	want := []time.Duration{time.Second, time.Second}
 	if len(res.ITL) != len(want) {
 		t.Fatalf("ITL = %v, want %v", res.ITL, want)
@@ -208,5 +210,77 @@ func TestRunNonStreamingFallbackUsesUsage(t *testing.T) {
 	if !res.TokensExact || res.OutputTokens != 7 || res.PromptTokens != 5 {
 		t.Errorf("got OutputTokens=%d PromptTokens=%d exact=%v, want 7/5/true",
 			res.OutputTokens, res.PromptTokens, res.TokensExact)
+	}
+}
+
+func TestRunFallsBackToMaxCompletionTokens(t *testing.T) {
+	var sawMaxCompletion bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var cr chatRequest
+		_ = json.NewDecoder(r.Body).Decode(&cr)
+		if cr.MaxTokens > 0 && cr.MaxCompletionTokens == 0 {
+			http.Error(w, `{"error":{"message":"Unsupported parameter: 'max_tokens' is not supported. Use 'max_completion_tokens' instead."}}`, http.StatusBadRequest)
+			return
+		}
+		sawMaxCompletion = cr.MaxCompletionTokens > 0
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, _ := w.(http.Flusher)
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":5}}\n\n"))
+		w.Write([]byte("data: [DONE]\n\n"))
+		if fl != nil {
+			fl.Flush()
+		}
+	}))
+	defer ts.Close()
+
+	res, err := Run(context.Background(), testConfig(ts.URL))
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if !sawMaxCompletion {
+		t.Error("second request should use max_completion_tokens")
+	}
+	if res.OutputTokens != 5 || !res.TokensExact {
+		t.Errorf("got OutputTokens=%d exact=%v, want 5/true", res.OutputTokens, res.TokensExact)
+	}
+}
+
+func TestRunCharsPerTokenOverride(t *testing.T) {
+	ts := sseServer(t, []string{
+		`{"choices":[{"delta":{"content":"abcdefgh"}}]}`,
+	})
+	defer ts.Close()
+
+	cfg := testConfig(ts.URL)
+	cfg.CharsPerToken = 2
+
+	res, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if res.OutputTokens != 4 {
+		t.Errorf("OutputTokens = %d, want 4 (8 runes / 2)", res.OutputTokens)
+	}
+}
+
+func TestRunComputesCost(t *testing.T) {
+	ts := sseServer(t, []string{
+		`{"choices":[{"delta":{"content":"hi"}}]}`,
+		`{"choices":[{"delta":{}}],"usage":{"prompt_tokens":1000,"completion_tokens":2000}}`,
+	})
+	defer ts.Close()
+
+	cfg := testConfig(ts.URL)
+	cfg.CostIn = 6   // $6 per 1M input tokens
+	cfg.CostOut = 12 // $12 per 1M output tokens
+
+	res, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	// 1000/1e6*6 + 2000/1e6*12 = 0.006 + 0.024 = 0.03
+	if diff := math.Abs(res.Cost - 0.03); diff > 1e-9 {
+		t.Errorf("Cost = %v, want ~0.03", res.Cost)
 	}
 }

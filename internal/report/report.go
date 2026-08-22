@@ -33,7 +33,11 @@ func Format(w io.Writer, r bench.Result) {
 		fmt.Fprintf(w, "  time to first     n/a\n")
 		fmt.Fprintf(w, "  generation        n/a\n")
 	}
-	fmt.Fprintf(w, "  total wall        %s\n\n", dur(r.TotalWall))
+	fmt.Fprintf(w, "  total wall        %s\n", dur(r.TotalWall))
+	if r.Cost > 0 {
+		fmt.Fprintf(w, "  cost              %s  (per request)\n", usd(r.Cost))
+	}
+	fmt.Fprintln(w)
 
 	fmt.Fprintf(w, "  TPS               %.1f tok/s   (generation)\n", r.TPS())
 	fmt.Fprintf(w, "  end-to-end        %.1f tok/s   (incl. TTFT)\n\n", r.EndToEndTPS())
@@ -75,7 +79,11 @@ func FormatSummary(w io.Writer, s bench.Summary, detail bool) {
 	if conc {
 		medianNote = "median/stream"
 	}
-	fmt.Fprintf(w, "  output tokens     %d   (%s, %s)\n\n", s.MedianOutputTokens(), label, medianNote)
+	fmt.Fprintf(w, "  output tokens     %d   (%s, %s)\n", s.MedianOutputTokens(), label, medianNote)
+	if s.CostConfigured() {
+		fmt.Fprintf(w, "  cost              %s  (median, per request)\n", usd(s.Cost().P50))
+	}
+	fmt.Fprintln(w)
 
 	if conc {
 		a := s.AggregateTPS()
@@ -101,7 +109,7 @@ func FormatSummary(w io.Writer, s bench.Summary, detail bool) {
 // writeITL appends the inter-token-latency line when streaming gaps exist.
 func writeITL(w io.Writer, s bench.Summary) {
 	if p50, p95, ok := s.ITL(); ok {
-		fmt.Fprintf(w, "  ITL      p50 %s   p95 %s   (inter-token)\n", ms(p50), ms(p95))
+		fmt.Fprintf(w, "  ITL      p50 %s   p95 %s   (inter-chunk)\n", ms(p50), ms(p95))
 	}
 }
 
@@ -124,25 +132,29 @@ func FormatJSON(w io.Writer, s bench.Summary) error {
 		WallSeconds  float64 `json:"wall_s"`
 		TPS          float64 `json:"tps"`
 		E2ETPS       float64 `json:"e2e_tps"`
+		CostUsd      float64 `json:"cost_usd"`
 	}
 
 	ttft, gen, e2e := s.TTFT(), s.GenTPS(), s.E2ETPS()
 	out := struct {
-		Model              string `json:"model"`
-		Host               string `json:"host"`
-		Runs               int    `json:"runs"`
-		Warmup             int    `json:"warmup"`
-		Concurrency        int    `json:"concurrency"`
-		PromptTokens       int    `json:"prompt_tokens"`
-		OutputTokensMedian int    `json:"output_tokens_median"`
-		TokensExact        bool   `json:"tokens_exact"`
-		Streamed           bool   `json:"streamed"`
-		AggregateTPS       *rng   `json:"aggregate_tps,omitempty"`
-		TTFTSeconds        rng    `json:"ttft_s"`
-		TPS                rng    `json:"tps"`
-		E2ETPS             rng    `json:"e2e_tps"`
-		ITLMillis          *itl   `json:"itl_ms,omitempty"`
-		RunsDetail         []run  `json:"runs_detail"`
+		Model              string  `json:"model"`
+		Host               string  `json:"host"`
+		Runs               int     `json:"runs"`
+		Warmup             int     `json:"warmup"`
+		Concurrency        int     `json:"concurrency"`
+		PromptTokens       int     `json:"prompt_tokens"`
+		OutputTokensMedian int     `json:"output_tokens_median"`
+		TokensExact        bool    `json:"tokens_exact"`
+		Streamed           bool    `json:"streamed"`
+		AggregateTPS       *rng    `json:"aggregate_tps,omitempty"`
+		TTFTSeconds        rng     `json:"ttft_s"`
+		TPS                rng     `json:"tps"`
+		E2ETPS             rng     `json:"e2e_tps"`
+		CostUsd            *rng    `json:"cost_usd,omitempty"`
+		CostInPer1M        float64 `json:"cost_in_per_1m,omitempty"`
+		CostOutPer1M       float64 `json:"cost_out_per_1m,omitempty"`
+		ITLMillis          *itl    `json:"itl_ms,omitempty"`
+		RunsDetail         []run   `json:"runs_detail"`
 	}{
 		Model: s.Model, Host: s.Host, Runs: s.RunCount(), Warmup: s.Warmup,
 		Concurrency:  max(s.Concurrency, 1),
@@ -156,6 +168,12 @@ func FormatJSON(w io.Writer, s bench.Summary) error {
 		a := s.AggregateTPS()
 		out.AggregateTPS = &rng{a.Min, a.P50, a.Max}
 	}
+	if s.CostConfigured() {
+		c := s.Cost()
+		out.CostUsd = &rng{c.Min, c.P50, c.Max}
+		out.CostInPer1M = s.CostIn
+		out.CostOutPer1M = s.CostOut
+	}
 	if p50, p95, ok := s.ITL(); ok {
 		out.ITLMillis = &itl{P50: p50, P95: p95}
 	}
@@ -164,6 +182,7 @@ func FormatJSON(w io.Writer, s bench.Summary) error {
 			OutputTokens: r.OutputTokens, Exact: r.TokensExact,
 			TTFTSeconds: r.TTFT.Seconds(), GenSeconds: r.GenTime.Seconds(),
 			WallSeconds: r.TotalWall.Seconds(), TPS: r.TPS(), E2ETPS: r.EndToEndTPS(),
+			CostUsd: r.Cost,
 		})
 	}
 
@@ -178,9 +197,15 @@ func FormatSweep(w io.Writer, sums []bench.Summary) {
 		return
 	}
 	fmt.Fprintf(w, "\ntokps — %s @ %s  (sweep, %d runs, %d warmup)\n\n", sums[0].Model, sums[0].Host, sums[0].RunCount(), sums[0].Warmup)
-	fmt.Fprintf(w, "  %-11s   %-15s   %-8s   %s\n", "concurrency", "aggregate tok/s", "TTFT p50", "TPS p50/stream")
+	fmt.Fprintf(w, "  %-11s   %-24s   %-22s   %s\n", "concurrency", "aggregate tok/s (range)", "TTFT p50 (range)", "TPS p50/stream")
 	for _, s := range sums {
-		fmt.Fprintf(w, "  %-11d   %-15.1f   %-8s   %.1f\n", s.Concurrency, s.AggregateTPS().P50, secs(s.TTFT().P50), s.GenTPS().P50)
+		a := s.AggregateTPS()
+		ttft := s.TTFT()
+		fmt.Fprintf(w, "  %-11d   %-24s   %-22s   %.1f\n",
+			s.Concurrency,
+			fmt.Sprintf("%.1f (%.1f–%.1f)", a.P50, a.Min, a.Max),
+			fmt.Sprintf("%s (%s–%s)", secs(ttft.P50), secs(ttft.Min), secs(ttft.Max)),
+			s.GenTPS().P50)
 	}
 	fmt.Fprintln(w)
 }
@@ -211,6 +236,17 @@ func FormatSweepJSON(w io.Writer, sums []bench.Summary) error {
 
 func dur(d time.Duration) string {
 	return fmt.Sprintf("%.2f s", d.Seconds())
+}
+
+// usd formats a dollar amount with precision that suits its magnitude.
+func usd(v float64) string {
+	if v >= 1 {
+		return fmt.Sprintf("$%.2f", v)
+	}
+	if v >= 0.01 {
+		return fmt.Sprintf("$%.4f", v)
+	}
+	return fmt.Sprintf("$%.6f", v)
 }
 
 func secs(s float64) string {

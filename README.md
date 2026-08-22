@@ -82,17 +82,25 @@ as-is.
 | `--api-key` | `API_KEY` env, then `OPENAI_API_KEY` | Bearer token. Flag wins over env. |
 | `--prompt` | built-in | Override the test prompt. |
 | `--max-tokens` | `512` | Upper bound on output length. |
+| `--max-tokens-field` | `max_tokens` | Field carrying the output cap: `max_tokens` or `max_completion_tokens` (newer OpenAI models). Auto-falls back when the endpoint rejects `max_tokens`. |
 | `--runs` | `5` | Number of timed runs; reports p50 + min–max across them. |
 | `--warmup` | `1` | Discarded warmup runs before measuring (absorbs cold start). |
-| `--detail` | `false` | Also show inter-token latency (ITL) p50/p95. |
+| `--detail` | `false` | Also show inter-chunk latency (ITL) p50/p95. |
 | `--json` | `false` | Emit machine-readable JSON instead of the text summary. |
 | `--concurrency` | `1` | Parallel streams per run; >1 reports aggregate tok/s under load. |
-| `--sweep` | — | Comma-separated concurrency levels to sweep, e.g. `1,2,4,8`. |
+| `--sweep` | — | Concurrency levels to sweep: bare `--sweep` = `1,2,4,8`, or `--sweep=1,2,4,8`. |
 | `--timeout` | `60s` | Per-request timeout. |
+| `--cost-in` | `0` | Input token price in USD per 1M tokens; adds a per-request cost line. |
+| `--cost-out` | `0` | Output token price in USD per 1M tokens; adds a per-request cost line. |
+| `--chars-per-token` | `4` | Chars-per-token ratio for the estimated fallback (CJK ~ 1.5–2). |
 
 > Each invocation sends `--warmup` + `--runs` requests (6 by default), so it
 > makes that many billable calls against a metered endpoint. Use
 > `--runs 1 --warmup 0` for a single request.
+>
+> Interrupt with Ctrl-C and tokps stops gracefully, printing how many measured
+> runs completed before the signal (exit code 130) — a long benchmark won't
+> hang, and you'll know how far it got.
 
 Run `tokps` with no flags to see the full list.
 
@@ -129,9 +137,11 @@ independent of how the server chose to chunk the stream.
 
 ### Detail and JSON output
 
-`--detail` adds an **inter-token latency (ITL)** line — the p50 and p95 of the
-gaps between successive streamed tokens, pooled across runs. p95 surfaces
-stalls/jitter that a single averaged rate hides.
+`--detail` adds an **inter-chunk latency (ITL)** line — the p50 and p95 of the
+gaps between successive content-bearing SSE chunks, pooled across runs. A chunk
+can carry more than one token (servers batch arbitrarily), so ITL is exact only
+when the server streams one token per event and otherwise an upper bound on
+per-token latency. p95 surfaces stalls/jitter that a single averaged rate hides.
 
 `--json` emits the full result as machine-readable JSON instead of the text
 table — the p50/min/max for every metric, ITL, and a `runs_detail` array with
@@ -145,8 +155,9 @@ adds an **aggregate tok/s** line (total output tokens across all streams ÷ wall
 time) alongside the per-stream TTFT/TPS distribution — i.e. throughput under
 load.
 
-`--sweep 1,2,4,8` runs the benchmark at each level in turn and prints the
-**throughput-vs-concurrency curve**, so you can see where an endpoint saturates:
+`--sweep=1,2,4,8` runs the benchmark at each level in turn and prints the
+**throughput-vs-concurrency curve**, so you can see where an endpoint saturates
+(a bare `--sweep` uses the default `1,2,4,8` curve):
 
 ```text
 tokps — glm-5.2 @ api.z.ai  (sweep, 3 runs, 1 warmup)
@@ -158,12 +169,24 @@ tokps — glm-5.2 @ api.z.ai  (sweep, 3 runs, 1 warmup)
   8             300.0             1.10s      37.5
 ```
 
+### Cost
+
+Pass `--cost-in` and `--cost-out` (USD per 1M tokens) and tokps adds a
+per-request cost line — the median across runs — plus a per-run `cost_usd` in
+`--json` output. Combined with TPS it doubles as a provider comparison: which
+endpoint gives the best dollars-per-token throughput.
+
 ### Reasoning models
 
 Reasoning models such as **GLM-5.2** and DeepSeek-R1 stream their thinking
 tokens in `delta.reasoning_content` rather than `delta.content`, often by
 default. tokps counts those toward timing and throughput, so TTFT and
 TPS reflect the full generation including the reasoning phase.
+
+Some newer OpenAI models reject `max_tokens` and require
+`max_completion_tokens`. tokps defaults to `max_tokens` but automatically
+retries with `max_completion_tokens` when the endpoint returns a 400 asking for
+it — or set `--max-tokens-field=max_completion_tokens` to always use it.
 
 ### Non-streaming endpoints
 

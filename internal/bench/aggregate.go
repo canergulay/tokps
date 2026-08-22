@@ -17,6 +17,8 @@ type Summary struct {
 	Host        string
 	Warmup      int       // number of discarded warmup runs (batches)
 	Concurrency int       // streams fired in parallel per run (1 = sequential)
+	CostIn      float64   // USD per 1M input tokens (0 = not configured)
+	CostOut     float64   // USD per 1M output tokens (0 = not configured)
 	Results     []Result  // every measured stream (runs × concurrency), in order
 	BatchTPS    []float64 // aggregate tok/s per run (total output tokens ÷ batch wall)
 }
@@ -55,19 +57,43 @@ func RunN(ctx context.Context, cfg Config, runs, warmup, concurrency int) (Summa
 	}
 	for i := range warmup {
 		if _, _, err := runBatch(ctx, cfg, concurrency, now); err != nil {
+			if ctx.Err() != nil {
+				return Summary{}, &InterruptedError{Completed: 0}
+			}
 			return Summary{}, fmt.Errorf("warmup batch %d: %w", i+1, err)
 		}
 	}
-	sum := Summary{Model: cfg.Model, Host: hostOf(cfg.URL), Warmup: warmup, Concurrency: concurrency}
+	sum := Summary{
+		Model:       cfg.Model,
+		Host:        hostOf(cfg.URL),
+		Warmup:      warmup,
+		Concurrency: concurrency,
+		CostIn:      cfg.CostIn,
+		CostOut:     cfg.CostOut,
+	}
 	for i := range runs {
 		results, aggTPS, err := runBatch(ctx, cfg, concurrency, now)
 		if err != nil {
+			if ctx.Err() != nil {
+				return Summary{}, &InterruptedError{Completed: len(sum.BatchTPS)}
+			}
 			return Summary{}, fmt.Errorf("batch %d: %w", i+1, err)
 		}
 		sum.Results = append(sum.Results, results...)
 		sum.BatchTPS = append(sum.BatchTPS, aggTPS)
 	}
 	return sum, nil
+}
+
+// InterruptedError reports that a benchmark was cut short (e.g. by SIGINT)
+// after some measured batches completed. Completed counts the timed batches
+// that finished before cancellation.
+type InterruptedError struct {
+	Completed int
+}
+
+func (e *InterruptedError) Error() string {
+	return fmt.Sprintf("interrupted after %d measured batch(es)", e.Completed)
 }
 
 // ParseLevels parses a comma-separated list of concurrency levels (e.g.
@@ -180,9 +206,23 @@ func (s Summary) AggregateTPS() Stat {
 	return statOf(s.BatchTPS)
 }
 
-// ITL pools the inter-token gaps from every measured run and returns their p50
-// and p95 in milliseconds. ok is false when no streaming gaps were recorded
-// (non-streaming responses, or single-token outputs).
+// Cost returns the min/p50/max of the estimated per-request cost across
+// measured runs, in USD. Values are meaningful only when CostIn/CostOut were
+// configured.
+func (s Summary) Cost() Stat {
+	return s.stat(func(r Result) float64 { return r.Cost })
+}
+
+// CostConfigured reports whether per-request cost was computed (either price
+// was set on the Config).
+func (s Summary) CostConfigured() bool {
+	return s.CostIn > 0 || s.CostOut > 0
+}
+
+// ITL pools the inter-event gaps (between content-bearing SSE chunks) from
+// every measured run and returns their p50 and p95 in milliseconds. ok is
+// false when no streaming gaps were recorded (non-streaming responses, or
+// single-chunk outputs).
 func (s Summary) ITL() (p50ms, p95ms float64, ok bool) {
 	var gaps []float64
 	for _, r := range s.Results {

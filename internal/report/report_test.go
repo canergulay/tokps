@@ -135,6 +135,9 @@ func TestFormatSweepShowsCurve(t *testing.T) {
 			t.Errorf("sweep output missing %q:\n%s", want, out)
 		}
 	}
+	if !strings.Contains(out, "–") {
+		t.Errorf("sweep rows should show min–max ranges:\n%s", out)
+	}
 }
 
 func TestFormatSweepJSONIsArray(t *testing.T) {
@@ -227,5 +230,66 @@ func TestFormatEstimatedAndNonStreaming(t *testing.T) {
 	}
 	if !strings.Contains(out, "n/a") {
 		t.Errorf("expected n/a for prompt tokens / timing:\n%s", out)
+	}
+}
+
+func TestFormatShowsCostWhenPresent(t *testing.T) {
+	r := bench.Result{
+		Model: "m", Host: "h", PromptTokens: 1000, OutputTokens: 2000, TokensExact: true,
+		TTFT: time.Second, GenTime: 2 * time.Second, TotalWall: 3 * time.Second, Streamed: true,
+		Cost: 0.03,
+	}
+	var buf bytes.Buffer
+	Format(&buf, r)
+	out := buf.String()
+	if !strings.Contains(out, "cost") || !strings.Contains(out, "$") {
+		t.Errorf("cost line missing:\n%s", out)
+	}
+
+	// Without a configured cost, no cost line appears.
+	r.Cost = 0
+	buf.Reset()
+	Format(&buf, r)
+	if strings.Contains(buf.String(), "cost") {
+		t.Errorf("cost line should be omitted when cost is 0:\n%s", buf.String())
+	}
+}
+
+func TestFormatSummaryShowsMedianCost(t *testing.T) {
+	s := bench.Summary{
+		Model: "m", Host: "h", Warmup: 1, CostIn: 6, CostOut: 12,
+		Results: []bench.Result{
+			{OutputTokens: 200, TokensExact: true, Streamed: true, TTFT: time.Second, GenTime: 2 * time.Second, TotalWall: 3 * time.Second, Cost: 0.02},
+			{OutputTokens: 200, TokensExact: true, Streamed: true, TTFT: time.Second, GenTime: 2 * time.Second, TotalWall: 3 * time.Second, Cost: 0.04},
+		},
+	}
+	var buf bytes.Buffer
+	FormatSummary(&buf, s, false)
+	out := buf.String()
+	if !strings.Contains(out, "cost") || !strings.Contains(out, "median") {
+		t.Errorf("median cost line missing:\n%s", out)
+	}
+}
+
+func TestFormatJSONIncludesCostWhenConfigured(t *testing.T) {
+	s := bench.Summary{
+		Model: "m", Host: "h", Warmup: 1, CostIn: 6, CostOut: 12,
+		Results: []bench.Result{
+			{OutputTokens: 200, TokensExact: true, Streamed: true, TTFT: time.Second, GenTime: 2 * time.Second, TotalWall: 3 * time.Second, Cost: 0.03},
+		},
+	}
+	var buf bytes.Buffer
+	if err := FormatJSON(&buf, s); err != nil {
+		t.Fatalf("FormatJSON error: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if c, ok := m["cost_usd"].(map[string]any); !ok || c["p50"] == nil {
+		t.Errorf("missing cost_usd.p50: %v", m["cost_usd"])
+	}
+	if m["cost_in_per_1m"].(float64) != 6 || m["cost_out_per_1m"].(float64) != 12 {
+		t.Errorf("cost rates not echoed: %v", m)
 	}
 }

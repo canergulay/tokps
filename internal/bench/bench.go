@@ -15,15 +15,19 @@ import (
 	"github.com/canergulay/tokps/internal/sse"
 )
 
-// avgCharsPerToken is the rule-of-thumb ratio used to estimate token counts
-// when the server omits a usage block. ~4 chars/token is OpenAI's documented
-// heuristic for English text — model-agnostic and independent of how the
-// server chose to chunk the stream, unlike counting SSE events.
+// avgCharsPerToken is the default chars/token ratio used to estimate token
+// counts when the server omits a usage block. ~4 chars/token is OpenAI's
+// documented heuristic for English text — model-agnostic and independent of
+// how the server chose to chunk the stream. Override with Config.CharsPerToken
+// for other scripts (CJK is closer to 1.5-2).
 const avgCharsPerToken = 4
 
 // estimateTokens approximates a token count from a rune count.
-func estimateTokens(runes int) int {
-	return int(math.Round(float64(runes) / avgCharsPerToken))
+func estimateTokens(runes int, charsPerToken float64) int {
+	if charsPerToken <= 0 {
+		charsPerToken = avgCharsPerToken
+	}
+	return int(math.Round(float64(runes) / charsPerToken))
 }
 
 // Config controls a single benchmark run.
@@ -36,6 +40,22 @@ type Config struct {
 	Timeout   time.Duration
 	Client    *http.Client     // defaults to &http.Client{} when nil
 	Now       func() time.Time // defaults to time.Now when nil
+
+	// MaxTokensField names the request field carrying the output cap:
+	// "max_tokens" (default, OpenAI-compatible) or "max_completion_tokens"
+	// (newer OpenAI models / some providers). When empty it defaults to
+	// max_tokens. Run also retries once with max_completion_tokens when an
+	// endpoint rejects max_tokens with a 400 mentioning the field.
+	MaxTokensField string
+
+	// CostIn and CostOut are USD per 1M tokens. When either is > 0, each
+	// Result also carries an estimated per-request cost.
+	CostIn  float64
+	CostOut float64
+
+	// CharsPerToken overrides the ~4 chars/token estimate used when a server
+	// omits usage (CJK text is closer to 1.5-2).
+	CharsPerToken float64
 }
 
 type chatMessage struct {
@@ -48,11 +68,12 @@ type streamOptions struct {
 }
 
 type chatRequest struct {
-	Model         string        `json:"model"`
-	Messages      []chatMessage `json:"messages"`
-	MaxTokens     int           `json:"max_tokens"`
-	Stream        bool          `json:"stream"`
-	StreamOptions streamOptions `json:"stream_options"`
+	Model               string        `json:"model"`
+	Messages            []chatMessage `json:"messages"`
+	MaxTokens           int           `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int           `json:"max_completion_tokens,omitempty"`
+	Stream              bool          `json:"stream"`
+	StreamOptions       streamOptions `json:"stream_options"`
 }
 
 type usage struct {
@@ -95,6 +116,20 @@ func poolingClient(concurrency int) *http.Client {
 	return &http.Client{Transport: t}
 }
 
+// requestCost estimates the cost of a single request from the configured
+// per-1M-token prices. It returns 0 when neither price is set.
+func requestCost(cfg Config, promptTokens, outputTokens int) float64 {
+	if cfg.CostIn <= 0 && cfg.CostOut <= 0 {
+		return 0
+	}
+	cost := 0.0
+	if promptTokens >= 0 {
+		cost += float64(promptTokens) / 1e6 * cfg.CostIn
+	}
+	cost += float64(outputTokens) / 1e6 * cfg.CostOut
+	return cost
+}
+
 // Run sends a streaming chat-completions request and returns timing and
 // token-throughput metrics.
 func Run(ctx context.Context, cfg Config) (Result, error) {
@@ -107,43 +142,68 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		client = &http.Client{}
 	}
 
-	body, err := json.Marshal(chatRequest{
-		Model:         cfg.Model,
-		Messages:      []chatMessage{{Role: "user", Content: cfg.Prompt}},
-		MaxTokens:     cfg.MaxTokens,
-		Stream:        true,
-		StreamOptions: streamOptions{IncludeUsage: true},
-	})
-	if err != nil {
-		return Result{}, err
-	}
-
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint(cfg.URL), bytes.NewReader(body))
-	if err != nil {
-		return Result{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	if cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	send := func(field string) (*http.Response, time.Time, error) {
+		reqBody := chatRequest{
+			Model:         cfg.Model,
+			Messages:      []chatMessage{{Role: "user", Content: cfg.Prompt}},
+			Stream:        true,
+			StreamOptions: streamOptions{IncludeUsage: true},
+		}
+		if field == "max_completion_tokens" {
+			reqBody.MaxCompletionTokens = cfg.MaxTokens
+		} else {
+			reqBody.MaxTokens = cfg.MaxTokens
+		}
+
+		body, err := json.Marshal(reqBody)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint(cfg.URL), bytes.NewReader(body))
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "text/event-stream")
+		if cfg.APIKey != "" {
+			req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+		}
+
+		tSend := now()
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+			resp.Body.Close()
+			return nil, time.Time{}, fmt.Errorf("endpoint returned %s: %s", resp.Status, strings.TrimSpace(string(b)))
+		}
+		return resp, tSend, nil
 	}
 
-	host := hostOf(cfg.URL)
-
-	tSend := now()
-	resp, err := client.Do(req)
+	field := cfg.MaxTokensField
+	if field == "" {
+		field = "max_tokens"
+	}
+	resp, tSend, err := send(field)
 	if err != nil {
-		return Result{}, err
+		// Newer OpenAI models reject max_tokens and ask for
+		// max_completion_tokens. Retry once with the other field when the
+		// endpoint says so.
+		if field != "max_completion_tokens" && strings.Contains(err.Error(), "max_completion_tokens") {
+			resp, tSend, err = send("max_completion_tokens")
+		}
+		if err != nil {
+			return Result{}, err
+		}
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		return Result{}, fmt.Errorf("endpoint returned %s: %s", resp.Status, strings.TrimSpace(string(b)))
-	}
+	host := hostOf(cfg.URL)
 
 	if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 		return runNonStreaming(resp, cfg, host, tSend, now)
@@ -193,7 +253,7 @@ func runStreaming(resp *http.Response, cfg Config, host string, tSend time.Time,
 		res.OutputTokens = u.CompletionTokens
 		res.TokensExact = true
 	} else {
-		res.OutputTokens = estimateTokens(textRunes)
+		res.OutputTokens = estimateTokens(textRunes, cfg.CharsPerToken)
 		res.TokensExact = false
 	}
 	if !tFirst.IsZero() {
@@ -203,6 +263,7 @@ func runStreaming(resp *http.Response, cfg Config, host string, tSend time.Time,
 	} else {
 		res.TotalWall = tEnd.Sub(tSend)
 	}
+	res.Cost = requestCost(cfg, res.PromptTokens, res.OutputTokens)
 	return res, nil
 }
 
@@ -234,8 +295,9 @@ func runNonStreaming(resp *http.Response, cfg Config, host string, tSend time.Ti
 		if len(cr.Choices) > 0 {
 			content = cr.Choices[0].Message.Content
 		}
-		res.OutputTokens = estimateTokens(utf8.RuneCountInString(content))
+		res.OutputTokens = estimateTokens(utf8.RuneCountInString(content), cfg.CharsPerToken)
 		res.TokensExact = false
 	}
+	res.Cost = requestCost(cfg, res.PromptTokens, res.OutputTokens)
 	return res, nil
 }
