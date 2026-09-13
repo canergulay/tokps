@@ -43,6 +43,13 @@ go install github.com/canergulay/tokps@latest
 This drops a `tokps` binary in `$(go env GOPATH)/bin`. Make sure that's
 on your `PATH`.
 
+Or run the published image without installing Go:
+
+```sh
+docker run --rm -e API_KEY ghcr.io/canergulay/tokps:latest \
+  --url https://api.openai.com/v1 --model gpt-4o-mini
+```
+
 Or build from source:
 
 ```sh
@@ -78,7 +85,7 @@ as-is.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--url` | *(required)* | Base URL of the endpoint. |
-| `--model` | *(required)* | Model name. |
+| `--model` | *(required)* | Model name. A comma-separated list (`--model a,b,c`) benchmarks each in turn and prints a comparison table. |
 | `--api-key` | `API_KEY` env, then `OPENAI_API_KEY` | Bearer token. Flag wins over env. |
 | `--prompt` | built-in | Override the test prompt. |
 | `--max-tokens` | `512` | Upper bound on output length. |
@@ -93,6 +100,11 @@ as-is.
 | `--cost-in` | `0` | Input token price in USD per 1M tokens; adds a per-request cost line. |
 | `--cost-out` | `0` | Output token price in USD per 1M tokens; adds a per-request cost line. |
 | `--chars-per-token` | `4` | Chars-per-token ratio for the estimated fallback (CJK ~ 1.5–2). |
+| `--extra-body` | — | JSON object merged into the request body, e.g. `'{"temperature":0}'` or a provider's thinking toggle. Your keys win. |
+| `--md` | `false` | Emit a GitHub-flavored markdown table instead of the text summary. |
+| `--quiet` | `false` | Suppress progress and warnings on stderr. |
+| `--min-tps` | `0` | CI gate: exit 3 if generation TPS p50 is below this. |
+| `--max-ttft` | `0` | CI gate: exit 3 if TTFT p50 exceeds this (e.g. `1.5s`). |
 
 > Each invocation sends `--warmup` + `--runs` requests (6 by default), so it
 > makes that many billable calls against a metered endpoint. Use
@@ -176,6 +188,79 @@ per-request cost line — the median across runs — plus a per-run `cost_usd` i
 `--json` output. Combined with TPS it doubles as a provider comparison: which
 endpoint gives the best dollars-per-token throughput.
 
+### Comparing models
+
+Give `--model` a comma-separated list and tokps benchmarks each model in turn
+against the same endpoint, then prints one row per model:
+
+```text
+tokps — compare @ api.z.ai  (5 runs, 1 warmup)
+
+  model         TTFT p50   TPS p50 (range)       e2e p50   cost/req   errors
+  glm-5.2       2.61s      73.1 (69.8–75.4)      36.8      $0.0013    –
+  glm-5-flash   0.41s      118.2 (110.0–121.9)   101.3     $0.0002    –
+```
+
+`--json` emits an array of the usual per-model objects; `--md` a markdown
+table. `--concurrency` applies to every model; `--sweep` cannot be combined
+with a multi-model `--model`.
+
+### Failures under load
+
+A stream that fails during a measured run (a `429` at high concurrency, a
+transient `5xx`) is recorded rather than aborting the benchmark. The summary
+gains an `errors` line, `--json` gains `streams`, `errors`, `error_rate`, and
+an `errors_detail` array, and a sweep level or compared model with no
+successful stream shows as `failed (429 Too Many Requests ×8)` instead of
+losing everything measured so far.
+
+```text
+  errors            2/40 streams   (429 Too Many Requests ×2)
+```
+
+Two things still fail fast: any warmup error, and — in sweep or compare
+mode — any error on the first level or model, which is the canary for auth
+and URL mistakes.
+
+### CI gates
+
+`--min-tps` and `--max-ttft` turn tokps into a deployment check: after the
+normal report, each violated threshold is printed as a `FAIL:` line on
+stderr and the process exits with code **3**.
+
+```sh
+tokps --url http://vllm:8000/v1 --model my-model --min-tps 50 --max-ttft 1s --quiet
+```
+
+In sweep and compare mode the thresholds apply to every level / model.
+
+### Provider-specific request fields
+
+`--extra-body` merges a JSON object into the request, so any provider knob
+can be set without a dedicated flag — disable a reasoning model's thinking
+phase, pin `temperature`, set `reasoning_effort`, and so on:
+
+```sh
+tokps --url https://api.z.ai/api/paas/v4 --model glm-5.2 \
+  --extra-body '{"thinking":{"type":"disabled"},"temperature":0}'
+```
+
+Your keys override anything tokps sets.
+
+### Progress and exit codes
+
+On an interactive terminal tokps prints one line per completed run to
+stderr (`run 3/5   72.1 tok/s`); the lines are omitted when stderr is
+redirected, and `--quiet` turns them off along with warnings.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | success |
+| `1` | request or benchmark error (including no successful stream at all) |
+| `2` | usage error |
+| `3` | a `--min-tps` / `--max-ttft` gate failed |
+| `130` | interrupted (Ctrl-C / SIGTERM) |
+
 ### Reasoning models
 
 Reasoning models such as **GLM-5.2** and DeepSeek-R1 stream their thinking
@@ -207,8 +292,11 @@ go build ./...
 The code is split into small, independently testable packages:
 
 - `internal/sse` — turns an SSE byte stream into data payloads.
-- `internal/bench` — builds/sends the request, drives the parser, collects metrics.
-- `internal/report` — formats the summary block.
+- `internal/bench` — builds/sends the request, drives the parser, collects
+  metrics; `aggregate.go` runs warmup/measured batches and sweeps,
+  `compare.go` runs model comparisons, `gate.go` checks CI thresholds,
+  `errors.go` types the failure modes.
+- `internal/report` — formats the text, markdown, and JSON output.
 
 ## License
 
