@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   measured runs reuse. Previously the default two-idle-connections-per-host limit
   meant high-concurrency batches paid TCP/TLS setup that warmup is meant to
   absorb, skewing the numbers.
+- `FormatSummary` no longer falls back to the single-shot block when only one
+  of several runs survived; it shows the percentile block plus the errors line.
 
 ### Added
 - Warmup + repeated measurement: `--runs` (default 5) timed requests after
@@ -46,8 +48,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `estimated` fallback (e.g. ~1.5–2 for CJK text).
 - Graceful Ctrl-C handling: an interrupted benchmark reports how many measured
   runs completed and exits with code 130 instead of dying silently.
+- `--model a,b,c` compare mode: benchmarks each model in turn against the same
+  endpoint and prints one row per model (text, `--md`, or a `--json` array).
+- Failures under load are recorded instead of aborting: the summary gains an
+  `errors` line, `--json` gains `streams`/`errors`/`error_rate`/`errors_detail`,
+  and a sweep level or compared model with no successful stream renders as a
+  `failed (…)` row. The first level/model stays a fail-fast canary.
+- `--min-tps` / `--max-ttft` CI gates: violated thresholds print `FAIL:` lines
+  and exit with code 3.
+- `--extra-body '{"temperature":0}'` merges arbitrary JSON into the request
+  body (your keys win) — provider-specific knobs without new flags.
+- `--md` emits GitHub-flavored markdown tables for pasting into issues.
+- Live progress on stderr (`run 3/5   72.1 tok/s`) when it is a terminal;
+  `--quiet` suppresses progress and warnings.
+- Release artifacts now include `checksums.txt`, and a multi-arch image is
+  published to `ghcr.io/canergulay/tokps` on every tag.
 
-## [0.1.0] - 2026-06-28
+## [0.1.0] - 2026-06-29
 
 ### Added
 - Single-shot CLI that measures token-generation throughput (TPS) of any
