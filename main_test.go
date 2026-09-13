@@ -224,3 +224,58 @@ func TestRunQuietSuppressesWarnings(t *testing.T) {
 		t.Errorf("--quiet should suppress warnings:\n%s", errb.String())
 	}
 }
+
+func TestRunGateFailureExits3(t *testing.T) {
+	ts := fakeServer(t)
+	defer ts.Close()
+	var out, errb bytes.Buffer
+	// The fake server is fast but finite; an absurd threshold must fail.
+	code := run([]string{"--url=" + ts.URL, "--model=m", "--runs=2", "--warmup=0", "--min-tps=1e12"}, &out, &errb)
+	if code != 3 {
+		t.Fatalf("exit = %d, want 3; stderr=%s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "FAIL: TPS p50") {
+		t.Errorf("stderr = %q, want a FAIL line", errb.String())
+	}
+	if !strings.Contains(out.String(), "TPS") {
+		t.Errorf("stdout should still carry the report:\n%s", out.String())
+	}
+}
+
+func TestRunGatePassExits0(t *testing.T) {
+	ts := fakeServer(t)
+	defer ts.Close()
+	var out, errb bytes.Buffer
+	code := run([]string{"--url=" + ts.URL, "--model=m", "--runs=2", "--warmup=0", "--min-tps=0.001", "--max-ttft=1h"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr=%s", code, errb.String())
+	}
+	if strings.Contains(errb.String(), "FAIL") {
+		t.Errorf("stderr should have no FAIL lines:\n%s", errb.String())
+	}
+}
+
+func TestRunSweepGateLabelsLevel(t *testing.T) {
+	ts := fakeServer(t)
+	defer ts.Close()
+	var out, errb bytes.Buffer
+	code := run([]string{"--url=" + ts.URL, "--model=m", "--runs=1", "--warmup=0", "--sweep=1,2", "--min-tps=1e12"}, &out, &errb)
+	if code != 3 {
+		t.Fatalf("exit = %d, want 3; stderr=%s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "FAIL: c=1 TPS p50") || !strings.Contains(errb.String(), "FAIL: c=2 TPS p50") {
+		t.Errorf("stderr = %q, want per-level FAIL lines", errb.String())
+	}
+}
+
+func TestRunRejectsNegativeGate(t *testing.T) {
+	for _, flag := range []string{"--min-tps=-1", "--max-ttft=-1s"} {
+		var out, errb bytes.Buffer
+		if code := run([]string{"--url=http://x", "--model=m", flag}, &out, &errb); code != 2 {
+			t.Errorf("%s: exit = %d, want 2", flag, code)
+		}
+		if !strings.Contains(errb.String(), "--min-tps") && !strings.Contains(errb.String(), "--max-ttft") {
+			t.Errorf("%s: stderr = %q, want the gate validation error", flag, errb.String())
+		}
+	}
+}

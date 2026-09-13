@@ -86,6 +86,8 @@ type options struct {
 	costIn, costOut              float64
 	charsPerToken                float64
 	extraBody                    string
+	minTPS                       float64
+	maxTTFT                      time.Duration
 }
 
 // parseFlags defines and parses the CLI flags. It returns the parsed options,
@@ -115,6 +117,8 @@ func parseFlags(args []string, stderr io.Writer) (*options, []string, int) {
 	fs.Float64Var(&opts.charsPerToken, "chars-per-token", 4, "Chars-per-token ratio for the estimated fallback (CJK ~ 1.5-2)")
 	fs.StringVar(&opts.extraBody, "extra-body", "", "JSON object merged into the request body, e.g. '{\"temperature\":0}' (your keys win)")
 	fs.BoolVar(&opts.quiet, "quiet", false, "Suppress progress and warnings on stderr (errors are still printed)")
+	fs.Float64Var(&opts.minTPS, "min-tps", 0, "CI gate: exit 3 if generation TPS p50 is below this (tok/s)")
+	fs.DurationVar(&opts.maxTTFT, "max-ttft", 0, "CI gate: exit 3 if TTFT p50 exceeds this (e.g. 1.5s)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -123,17 +127,6 @@ func parseFlags(args []string, stderr io.Writer) (*options, []string, int) {
 		return opts, nil, 2
 	}
 	return opts, fs.Args(), -1
-}
-
-// interruptedCode returns an exit code when err is an interruption, otherwise
-// -1 (meaning "not an interruption").
-func interruptedCode(err error, stderr io.Writer, runs int) int {
-	var ie *bench.InterruptedError
-	if errors.As(err, &ie) {
-		fmt.Fprintf(stderr, "interrupted: %d/%d measured runs completed\n", ie.Completed, runs)
-		return 130
-	}
-	return -1
 }
 
 func looksLikeLevels(s string) bool {
@@ -213,6 +206,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "error: --timeout must be > 0")
 		return 2
 	}
+	if opts.minTPS < 0 || opts.maxTTFT < 0 {
+		fmt.Fprintln(stderr, "error: --min-tps and --max-ttft must be >= 0")
+		return 2
+	}
 
 	var extra map[string]any
 	if opts.extraBody != "" {
@@ -256,43 +253,42 @@ func run(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	gate := bench.Gate{MinTPS: opts.minTPS, MaxTTFT: opts.maxTTFT}
+
 	if opts.sweep.enabled {
 		sums, err := bench.RunSweep(ctx, cfg, opts.runs, opts.warmup, opts.sweep.levels)
 		if err != nil {
-			if code := interruptedCode(err, stderr, opts.runs); code >= 0 {
-				return code
-			}
-			fmt.Fprintf(stderr, "error: %v\n", err)
-			return 1
+			return reportErr(err, stderr, opts.runs)
 		}
 		if opts.jsonOut {
 			if err := report.FormatSweepJSON(stdout, sums); err != nil {
 				fmt.Fprintf(stderr, "error: %v\n", err)
 				return 1
 			}
-			return 0
+		} else {
+			report.FormatSweep(stdout, sums)
 		}
-		report.FormatSweep(stdout, sums)
+		if checkGates(gate, sums, levelLabel, stderr) {
+			return exitGateFailed
+		}
 		return 0
 	}
 
 	sum, err := bench.RunN(ctx, cfg, opts.runs, opts.warmup, opts.concurrency)
 	if err != nil {
-		if code := interruptedCode(err, stderr, opts.runs); code >= 0 {
-			return code
-		}
-		fmt.Fprintf(stderr, "error: %v\n", err)
-		return 1
+		return reportErr(err, stderr, opts.runs)
 	}
-
 	if opts.jsonOut {
 		if err := report.FormatJSON(stdout, sum); err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
-		return 0
+	} else {
+		report.FormatSummary(stdout, sum, opts.detail)
 	}
-	report.FormatSummary(stdout, sum, opts.detail)
+	if checkGates(gate, []bench.Summary{sum}, noLabel, stderr) {
+		return exitGateFailed
+	}
 	return 0
 }
 
