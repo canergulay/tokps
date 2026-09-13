@@ -2,8 +2,13 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/canergulay/tokps/internal/bench"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -140,5 +145,82 @@ func TestRunRejectsNonObjectExtraBody(t *testing.T) {
 		if !strings.Contains(errb.String(), "--extra-body") {
 			t.Errorf("--extra-body=%s: stderr = %q, want it to mention --extra-body", bad, errb.String())
 		}
+	}
+}
+
+// fakeServer serves a minimal streaming completion for end-to-end run() tests.
+func fakeServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":5}}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+}
+
+func TestProgressLineFormats(t *testing.T) {
+	cases := []struct {
+		ev   bench.ProgressEvent
+		want string
+	}{
+		{bench.ProgressEvent{Phase: "warmup", Index: 1, Total: 1, Concurrency: 1}, "warmup 1/1"},
+		{bench.ProgressEvent{Phase: "run", Index: 3, Total: 5, Concurrency: 1, BatchTPS: 72.14}, "run 3/5   72.1 tok/s"},
+		{bench.ProgressEvent{Phase: "run", Index: 1, Total: 2, Concurrency: 4, BatchTPS: 250, Label: "c=4"}, "c=4  run 1/2   250.0 tok/s (aggregate, 4 streams)"},
+		{bench.ProgressEvent{Phase: "run", Index: 1, Total: 2, Concurrency: 4, BatchTPS: 180, Failed: 2}, "run 1/2   180.0 tok/s (aggregate, 4 streams)   2 failed"},
+	}
+	for _, c := range cases {
+		if got := progressLine(c.ev); got != c.want {
+			t.Errorf("progressLine(%+v) = %q, want %q", c.ev, got, c.want)
+		}
+	}
+}
+
+func TestIsTerminalFalseForBuffer(t *testing.T) {
+	if isTerminal(&bytes.Buffer{}) {
+		t.Error("isTerminal(buffer) = true, want false")
+	}
+}
+
+func TestRunNoProgressWhenStderrNotTerminal(t *testing.T) {
+	ts := fakeServer(t)
+	defer ts.Close()
+	var out, errb bytes.Buffer
+	if code := run([]string{"--url=" + ts.URL, "--model=m", "--runs=2", "--warmup=0"}, &out, &errb); code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr=%s", code, errb.String())
+	}
+	if strings.Contains(errb.String(), "run 1/2") {
+		t.Errorf("stderr should carry no progress when it is not a terminal:\n%s", errb.String())
+	}
+	if !strings.Contains(out.String(), "TPS") {
+		t.Errorf("stdout missing the summary:\n%s", out.String())
+	}
+}
+
+func TestRunQuietSuppressesWarnings(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: not json\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":5}}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer ts.Close()
+
+	var out, errb bytes.Buffer
+	args := []string{"--url=" + ts.URL, "--model=m", "--runs=1", "--warmup=0"}
+	if code := run(args, &out, &errb); code != 0 {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	if !strings.Contains(errb.String(), "warning:") {
+		t.Errorf("without --quiet, stderr should carry the warning:\n%s", errb.String())
+	}
+	out.Reset()
+	errb.Reset()
+	if code := run(append(args, "--quiet"), &out, &errb); code != 0 {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	if strings.Contains(errb.String(), "warning:") {
+		t.Errorf("--quiet should suppress warnings:\n%s", errb.String())
 	}
 }

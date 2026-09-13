@@ -82,6 +82,7 @@ type options struct {
 	runs, warmup, concurrency    int
 	sweep                        sweepValue
 	detail, jsonOut, showVersion bool
+	quiet                        bool
 	costIn, costOut              float64
 	charsPerToken                float64
 	extraBody                    string
@@ -113,6 +114,7 @@ func parseFlags(args []string, stderr io.Writer) (*options, []string, int) {
 	fs.Float64Var(&opts.costOut, "cost-out", 0, "Output token price in USD per 1M tokens (adds a per-request cost line)")
 	fs.Float64Var(&opts.charsPerToken, "chars-per-token", 4, "Chars-per-token ratio for the estimated fallback (CJK ~ 1.5-2)")
 	fs.StringVar(&opts.extraBody, "extra-body", "", "JSON object merged into the request body, e.g. '{\"temperature\":0}' (your keys win)")
+	fs.BoolVar(&opts.quiet, "quiet", false, "Suppress progress and warnings on stderr (errors are still printed)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -137,6 +139,39 @@ func interruptedCode(err error, stderr io.Writer, runs int) int {
 func looksLikeLevels(s string) bool {
 	_, err := bench.ParseLevels(s)
 	return err == nil
+}
+
+// isTerminal reports whether w is an interactive terminal (a character
+// device), so progress lines reach humans but stay out of CI logs and pipes.
+func isTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	st, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return st.Mode()&os.ModeCharDevice != 0
+}
+
+// progressLine formats one batch's progress for stderr.
+func progressLine(ev bench.ProgressEvent) string {
+	var b strings.Builder
+	if ev.Label != "" {
+		fmt.Fprintf(&b, "%s  ", ev.Label)
+	}
+	fmt.Fprintf(&b, "%s %d/%d", ev.Phase, ev.Index, ev.Total)
+	if ev.Phase == "run" {
+		fmt.Fprintf(&b, "   %.1f tok/s", ev.BatchTPS)
+		if ev.Concurrency > 1 {
+			fmt.Fprintf(&b, " (aggregate, %d streams)", ev.Concurrency)
+		}
+		if ev.Failed > 0 {
+			fmt.Fprintf(&b, "   %d failed", ev.Failed)
+		}
+	}
+	return b.String()
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -207,9 +242,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		CostOut:        opts.costOut,
 		CharsPerToken:  opts.charsPerToken,
 		ExtraBody:      extra,
-		Warnf: func(format string, args ...any) {
+	}
+
+	if !opts.quiet {
+		cfg.Warnf = func(format string, args ...any) {
 			fmt.Fprintf(stderr, "warning: "+format+"\n", args...)
-		},
+		}
+		if isTerminal(stderr) {
+			cfg.Progress = func(ev bench.ProgressEvent) { fmt.Fprintln(stderr, progressLine(ev)) }
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
