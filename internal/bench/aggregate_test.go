@@ -2,8 +2,12 @@ package bench
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -271,5 +275,166 @@ func TestWithLabelStampsEvents(t *testing.T) {
 	// withLabel on a Config without Progress stays a no-op.
 	if withLabel(Config{}, "x").Progress != nil {
 		t.Error("withLabel should not install a callback when none is configured")
+	}
+}
+
+// scriptedServer streams a normal completion, except for requests whose
+// 1-based arrival number makes fail(n) true — those get a 429.
+func scriptedServer(t *testing.T, fail func(n int) bool) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var calls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := int(calls.Add(1))
+		if fail(n) {
+			http.Error(w, `{"error":"rate limited"}`, http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":5}}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	return ts, &calls
+}
+
+func TestRunNRecordsFailedStreamAndContinues(t *testing.T) {
+	// runs=3, warmup=0, concurrency=1: the 2nd measured request is 429'd.
+	ts, _ := scriptedServer(t, func(n int) bool { return n == 2 })
+	defer ts.Close()
+
+	cfg := testConfig(ts.URL)
+	var events []ProgressEvent
+	cfg.Progress = func(ev ProgressEvent) { events = append(events, ev) }
+
+	sum, err := RunN(context.Background(), cfg, 3, 0, 1)
+	if err != nil {
+		t.Fatalf("RunN error: %v, want nil (a partial failure is recorded, not fatal)", err)
+	}
+	if sum.Streams != 3 || sum.StreamCount() != 3 {
+		t.Errorf("Streams = %d, want 3", sum.Streams)
+	}
+	if sum.Failed() != 1 {
+		t.Fatalf("Failed = %d, want 1 (errors=%+v)", sum.Failed(), sum.Errors)
+	}
+	if len(sum.Results) != 2 {
+		t.Errorf("Results = %d, want 2", len(sum.Results))
+	}
+	if len(sum.BatchTPS) != 3 {
+		t.Errorf("BatchTPS = %d, want 3 (the failed batch still counts as a run)", len(sum.BatchTPS))
+	}
+	if sum.BatchTPS[1] != 0 {
+		t.Errorf("BatchTPS[1] = %v, want 0 for the failed batch", sum.BatchTPS[1])
+	}
+	if e := sum.Errors[0]; e.Batch != 2 || e.Status != 429 || !strings.Contains(e.Err, "429") {
+		t.Errorf("Errors[0] = %+v, want Batch=2 Status=429", e)
+	}
+	if got := sum.ErrorRate(); math.Abs(got-1.0/3) > 1e-9 {
+		t.Errorf("ErrorRate = %v, want 1/3", got)
+	}
+	if sum.AllFailed() {
+		t.Error("AllFailed = true, want false")
+	}
+	if len(events) != 3 || events[1].Failed != 1 || events[0].Failed != 0 {
+		t.Errorf("progress events = %+v, want the 2nd run to report 1 failed", events)
+	}
+}
+
+func TestRunNAllFailedReturnsSummaryAndError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"nope"}`, http.StatusServiceUnavailable)
+	}))
+	defer ts.Close()
+
+	sum, err := RunN(context.Background(), testConfig(ts.URL), 2, 0, 2)
+	var af *AllFailedError
+	if !errors.As(err, &af) {
+		t.Fatalf("error = %T (%v), want *AllFailedError", err, err)
+	}
+	if sum.Streams != 4 || sum.Failed() != 4 || !sum.AllFailed() {
+		t.Errorf("Streams=%d Failed=%d AllFailed=%v, want 4/4/true", sum.Streams, sum.Failed(), sum.AllFailed())
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Errorf("error = %q, want it to mention 503", err.Error())
+	}
+}
+
+func TestRunNWarmupFailureAbortsWithDetail(t *testing.T) {
+	ts, calls := scriptedServer(t, func(n int) bool { return n == 1 })
+	defer ts.Close()
+
+	sum, err := RunN(context.Background(), testConfig(ts.URL), 2, 1, 1)
+	if err == nil {
+		t.Fatal("expected a warmup failure to abort")
+	}
+	var af *AllFailedError
+	if errors.As(err, &af) {
+		t.Errorf("warmup failure should not be AllFailedError: %v", err)
+	}
+	if !strings.Contains(err.Error(), "warmup batch 1") {
+		t.Errorf("error = %q, want warmup batch context", err.Error())
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("server calls = %d, want 1 (abort right after warmup)", got)
+	}
+	// The returned Summary still explains what happened, for sweep/compare rows.
+	if !sum.AllFailed() || sum.Streams != 0 || len(sum.Errors) != 1 || sum.Errors[0].Batch != 0 || sum.Errors[0].Status != 429 {
+		t.Errorf("warmup-failed summary = %+v, want AllFailed, Streams=0, one Batch=0 429 error", sum)
+	}
+	if sum.Model != "test-model" || sum.Concurrency != 1 {
+		t.Errorf("warmup-failed summary should carry Model/Concurrency: %+v", sum)
+	}
+}
+
+func TestRunNConcurrentBatchAggregateExcludesFailedStreams(t *testing.T) {
+	// 4 parallel streams, 1 measured batch; the 2nd and 4th arrivals are 429'd.
+	ts, _ := scriptedServer(t, func(n int) bool { return n%2 == 0 })
+	defer ts.Close()
+
+	sum, err := RunN(context.Background(), testConfig(ts.URL), 1, 0, 4)
+	if err != nil {
+		t.Fatalf("RunN error: %v", err)
+	}
+	if sum.Failed() != 2 || len(sum.Results) != 2 {
+		t.Errorf("Failed=%d Results=%d, want 2/2", sum.Failed(), len(sum.Results))
+	}
+	if sum.BatchTPS[0] <= 0 {
+		t.Errorf("BatchTPS[0] = %v, want > 0 from the surviving streams", sum.BatchTPS[0])
+	}
+}
+
+func TestSummaryErrorGroupsSortsByCountThenLabel(t *testing.T) {
+	s := Summary{Streams: 10, Errors: []StreamError{
+		{Batch: 1, Status: 500, Err: "endpoint returned 500 Internal Server Error: x"},
+		{Batch: 1, Status: 429, Err: "endpoint returned 429 Too Many Requests: y"},
+		{Batch: 2, Status: 429, Err: "endpoint returned 429 Too Many Requests: y"},
+		{Batch: 3, Err: "Post \"http://x\": dial tcp: connection refused"},
+	}}
+	got := s.ErrorGroups()
+	want := []ErrorGroup{
+		{"429 Too Many Requests", 2},
+		{"500 Internal Server Error", 1},
+		{"Post \"http://x\": dial tcp: connection refused", 1},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("groups = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("groups[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	long := Summary{Errors: []StreamError{{Err: strings.Repeat("x", 80)}}}
+	if l := long.ErrorGroups()[0].Label; len([]rune(l)) != 61 || !strings.HasSuffix(l, "…") {
+		t.Errorf("long label = %q, want 60 runes + ellipsis", l)
+	}
+}
+
+func TestSummaryStreamCountFallsBackForHandBuiltSummaries(t *testing.T) {
+	s := Summary{Results: []Result{{}, {}}, Errors: []StreamError{{}}}
+	if got := s.StreamCount(); got != 3 {
+		t.Errorf("StreamCount = %d, want 3 (results + errors)", got)
+	}
+	if got := (Summary{}).ErrorRate(); got != 0 {
+		t.Errorf("ErrorRate of empty = %v, want 0", got)
 	}
 }

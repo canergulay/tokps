@@ -15,12 +15,14 @@ import (
 type Summary struct {
 	Model       string
 	Host        string
-	Warmup      int       // number of discarded warmup runs (batches)
-	Concurrency int       // streams fired in parallel per run (1 = sequential)
-	CostIn      float64   // USD per 1M input tokens (0 = not configured)
-	CostOut     float64   // USD per 1M output tokens (0 = not configured)
-	Results     []Result  // every measured stream (runs × concurrency), in order
-	BatchTPS    []float64 // aggregate tok/s per run (total output tokens ÷ batch wall)
+	Warmup      int           // number of discarded warmup runs (batches)
+	Concurrency int           // streams fired in parallel per run (1 = sequential)
+	CostIn      float64       // USD per 1M input tokens (0 = not configured)
+	CostOut     float64       // USD per 1M output tokens (0 = not configured)
+	Results     []Result      // every measured stream (runs × concurrency), in order
+	BatchTPS    []float64     // aggregate tok/s per run (total output tokens ÷ batch wall)
+	Streams     int           // measured streams attempted (runs × concurrency); 0 if warmup failed
+	Errors      []StreamError // streams that failed (Batch 0 = warmup)
 }
 
 // Stat summarizes a metric across the measured runs as a median plus the
@@ -37,8 +39,13 @@ type Stat struct {
 // the same endpoint and returns their results. Each run is a batch of
 // `concurrency` parallel streams (concurrency 1 = sequential, the default). A
 // warmup absorbs cold-start and connection setup so the measured numbers
-// reflect steady state. Any request error aborts the whole benchmark (fail fast
-// on auth/URL problems).
+// reflect steady state.
+//
+// A warmup failure aborts (fail fast on auth/URL problems). In measured
+// batches a failed stream is recorded in Summary.Errors and the benchmark
+// continues; only when no stream at all succeeds does RunN return an
+// *AllFailedError. In both error cases the returned Summary is still
+// populated so callers can report what happened.
 func RunN(ctx context.Context, cfg Config, runs, warmup, concurrency int) (Summary, error) {
 	if runs < 1 {
 		runs = 1
@@ -55,15 +62,6 @@ func RunN(ctx context.Context, cfg Config, runs, warmup, concurrency int) (Summa
 		// warmup can establish the connections the timed runs reuse.
 		cfg.Client = poolingClient(concurrency)
 	}
-	for i := range warmup {
-		if _, _, err := runBatch(ctx, cfg, concurrency, now); err != nil {
-			if ctx.Err() != nil {
-				return Summary{}, &InterruptedError{Completed: 0}
-			}
-			return Summary{}, fmt.Errorf("warmup batch %d: %w", i+1, err)
-		}
-		cfg.progress(ProgressEvent{Phase: "warmup", Index: i + 1, Total: warmup, Concurrency: concurrency})
-	}
 	sum := Summary{
 		Model:       cfg.Model,
 		Host:        hostOf(cfg.URL),
@@ -72,17 +70,35 @@ func RunN(ctx context.Context, cfg Config, runs, warmup, concurrency int) (Summa
 		CostIn:      cfg.CostIn,
 		CostOut:     cfg.CostOut,
 	}
-	for i := range runs {
-		results, aggTPS, err := runBatch(ctx, cfg, concurrency, now)
-		if err != nil {
+	for i := range warmup {
+		if _, _, errs := runBatch(ctx, cfg, concurrency, now); len(errs) > 0 {
 			if ctx.Err() != nil {
-				return Summary{}, &InterruptedError{Completed: len(sum.BatchTPS)}
+				return Summary{}, &InterruptedError{Completed: 0}
 			}
-			return Summary{}, fmt.Errorf("batch %d: %w", i+1, err)
+			sum.Errors = append(sum.Errors, newStreamError(0, errs[0]))
+			return sum, fmt.Errorf("warmup batch %d: %w", i+1, errs[0])
+		}
+		cfg.progress(ProgressEvent{Phase: "warmup", Index: i + 1, Total: warmup, Concurrency: concurrency})
+	}
+	sum.Streams = runs * concurrency
+	var firstErr error
+	for i := range runs {
+		results, aggTPS, errs := runBatch(ctx, cfg, concurrency, now)
+		if len(errs) > 0 && ctx.Err() != nil {
+			return Summary{}, &InterruptedError{Completed: len(sum.BatchTPS)}
+		}
+		for _, err := range errs {
+			if firstErr == nil {
+				firstErr = err
+			}
+			sum.Errors = append(sum.Errors, newStreamError(i+1, err))
 		}
 		sum.Results = append(sum.Results, results...)
 		sum.BatchTPS = append(sum.BatchTPS, aggTPS)
-		cfg.progress(ProgressEvent{Phase: "run", Index: i + 1, Total: runs, Concurrency: concurrency, BatchTPS: aggTPS})
+		cfg.progress(ProgressEvent{Phase: "run", Index: i + 1, Total: runs, Concurrency: concurrency, BatchTPS: aggTPS, Failed: len(errs)})
+	}
+	if len(sum.Results) == 0 {
+		return sum, &AllFailedError{Err: firstErr}
 	}
 	return sum, nil
 }
@@ -125,14 +141,14 @@ func RunSweep(ctx context.Context, cfg Config, runs, warmup int, levels []int) (
 	return sums, nil
 }
 
-// runBatch runs `concurrency` requests in parallel and returns their results
-// plus the aggregate generation rate (total output tokens ÷ batch wall time).
-// Any stream error aborts the batch.
-func runBatch(ctx context.Context, cfg Config, concurrency int, now func() time.Time) ([]Result, float64, error) {
+// runBatch runs `concurrency` requests in parallel and returns the successful
+// results, the aggregate generation rate (successful streams' output tokens ÷
+// batch wall time, 0 when none succeeded), and one error per failed stream.
+func runBatch(ctx context.Context, cfg Config, concurrency int, now func() time.Time) ([]Result, float64, []error) {
 	if concurrency <= 1 {
 		r, err := Run(ctx, cfg)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, []error{err}
 		}
 		return []Result{r}, r.EndToEndTPS(), nil
 	}
@@ -151,28 +167,23 @@ func runBatch(ctx context.Context, cfg Config, concurrency int, now func() time.
 	}
 
 	var results []Result
-	var firstErr error
+	var errs []error
 	total := 0
 	for range concurrency {
 		o := <-ch
 		if o.err != nil {
-			if firstErr == nil {
-				firstErr = o.err
-			}
+			errs = append(errs, o.err)
 			continue
 		}
 		results = append(results, o.r)
 		total += o.r.OutputTokens
 	}
-	if firstErr != nil {
-		return nil, 0, firstErr
-	}
 
 	agg := 0.0
-	if wall := now().Sub(t0).Seconds(); wall > 0 {
+	if wall := now().Sub(t0).Seconds(); wall > 0 && total > 0 {
 		agg = float64(total) / wall
 	}
-	return results, agg, nil
+	return results, agg, errs
 }
 
 // TTFT returns the min/p50/max of time-to-first-token, in seconds.
