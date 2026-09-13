@@ -389,9 +389,15 @@ func TestFormatJSONIncludesErrors(t *testing.T) {
 	s.Errors = nil
 	buf.Reset()
 	_ = FormatJSON(&buf, s)
-	_ = json.Unmarshal(buf.Bytes(), &m)
-	if m["errors"].(float64) != 0 || m["errors_detail"] != nil {
-		t.Errorf("clean run JSON = %v, want errors=0 and no errors_detail", m)
+	var clean map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &clean); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if clean["errors"].(float64) != 0 {
+		t.Errorf("clean run errors = %v, want 0", clean["errors"])
+	}
+	if _, present := clean["errors_detail"]; present {
+		t.Errorf("clean run JSON should omit errors_detail, got %v", clean["errors_detail"])
 	}
 }
 

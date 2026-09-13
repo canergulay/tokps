@@ -140,33 +140,28 @@ type jsonStreamError struct {
 // summaryJSON is the machine-readable shape of one Summary, shared by --json
 // and the compare array so one consumer handles both.
 type summaryJSON struct {
-	Model              string     `json:"model"`
-	Host               string     `json:"host"`
-	Runs               int        `json:"runs"`
-	Warmup             int        `json:"warmup"`
-	Concurrency        int        `json:"concurrency"`
-	Streams            int        `json:"streams"`
-	Errors             int        `json:"errors"`
-	ErrorRate          float64    `json:"error_rate"`
-	PromptTokens       int        `json:"prompt_tokens"`
-	OutputTokensMedian int        `json:"output_tokens_median"`
-	TokensExact        bool       `json:"tokens_exact"`
-	Streamed           bool       `json:"streamed"`
-	AggregateTPS       *jsonRange `json:"aggregate_tps,omitempty"`
-	TTFTSeconds        jsonRange  `json:"ttft_s"`
-	TPS                jsonRange  `json:"tps"`
-	E2ETPS             jsonRange  `json:"e2e_tps"`
-	CostUsd            *jsonRange `json:"cost_usd,omitempty"`
-	CostInPer1M        float64    `json:"cost_in_per_1m,omitempty"`
-	CostOutPer1M       float64    `json:"cost_out_per_1m,omitempty"`
-	ITLMillis          *jsonITL   `json:"itl_ms,omitempty"`
-	RunsDetail         []jsonRun  `json:"runs_detail"`
-	// ErrorsDetail intentionally has no omitempty: unmarshalling a later,
-	// error-free encode into a map already holding a previous errors_detail
-	// value would otherwise leave the stale entry in place (encoding/json
-	// only overwrites keys present in the new object), so a clean run must
-	// still emit the key with an explicit JSON null.
-	ErrorsDetail []jsonStreamError `json:"errors_detail"`
+	Model              string            `json:"model"`
+	Host               string            `json:"host"`
+	Runs               int               `json:"runs"`
+	Warmup             int               `json:"warmup"`
+	Concurrency        int               `json:"concurrency"`
+	Streams            int               `json:"streams"`
+	Errors             int               `json:"errors"`
+	ErrorRate          float64           `json:"error_rate"`
+	PromptTokens       int               `json:"prompt_tokens"`
+	OutputTokensMedian int               `json:"output_tokens_median"`
+	TokensExact        bool              `json:"tokens_exact"`
+	Streamed           bool              `json:"streamed"`
+	AggregateTPS       *jsonRange        `json:"aggregate_tps,omitempty"`
+	TTFTSeconds        jsonRange         `json:"ttft_s"`
+	TPS                jsonRange         `json:"tps"`
+	E2ETPS             jsonRange         `json:"e2e_tps"`
+	CostUsd            *jsonRange        `json:"cost_usd,omitempty"`
+	CostInPer1M        float64           `json:"cost_in_per_1m,omitempty"`
+	CostOutPer1M       float64           `json:"cost_out_per_1m,omitempty"`
+	ITLMillis          *jsonITL          `json:"itl_ms,omitempty"`
+	RunsDetail         []jsonRun         `json:"runs_detail"`
+	ErrorsDetail       []jsonStreamError `json:"errors_detail,omitempty"`
 }
 
 // toJSON builds the JSON view of s.
