@@ -2,16 +2,9 @@ package bench
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 )
-
-// isInterrupted reports whether err wraps an *InterruptedError.
-func isInterrupted(err error) bool {
-	var ie *InterruptedError
-	return errors.As(err, &ie)
-}
 
 // ParseModels splits a comma-separated --model value into trimmed names. A
 // single name is the ordinary (non-compare) case; empty entries are an error.

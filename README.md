@@ -228,6 +228,12 @@ and URL mistakes.
 normal report, each violated threshold is printed as a `FAIL:` line on
 stderr and the process exits with code **3**.
 
+Thresholds are checked against **successful streams only**. Failed streams
+(see *Failures under load*) appear in the `errors` line but do not by
+themselves fail a gate; a run in which *no* stream succeeded fails with
+`FAIL: no successful streams`. `--max-ttft` also fails when the endpoint did
+not stream (TTFT is unavailable).
+
 ```sh
 tokps --url http://vllm:8000/v1 --model my-model --min-tps 50 --max-ttft 1s --quiet
 ```

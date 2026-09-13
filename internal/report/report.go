@@ -84,7 +84,11 @@ func FormatSummary(w io.Writer, s bench.Summary, detail bool) {
 
 	if conc {
 		a := s.AggregateTPS()
-		fmt.Fprintf(w, "  aggregate   p50 %.1f   range %.1f–%.1f   (tok/s, all streams)\n", a.P50, a.Min, a.Max)
+		streams := "all streams"
+		if s.Failed() > 0 {
+			streams = "successful streams"
+		}
+		fmt.Fprintf(w, "  aggregate   p50 %.1f   range %.1f–%.1f   (tok/s, %s)\n", a.P50, a.Min, a.Max, streams)
 	}
 
 	per := ""
@@ -171,7 +175,7 @@ func toJSON(s bench.Summary) summaryJSON {
 	out := summaryJSON{
 		Model: s.Model, Host: s.Host, Runs: s.RunCount(), Warmup: s.Warmup,
 		Concurrency: max(s.Concurrency, 1),
-		Streams:     s.StreamCount(), Errors: s.Failed(), ErrorRate: s.ErrorRate(),
+		Streams:     s.Streams, Errors: s.Failed(), ErrorRate: s.ErrorRate(),
 		PromptTokens: s.PromptTokens(), OutputTokensMedian: s.MedianOutputTokens(),
 		TokensExact: s.Exact(), Streamed: s.Streamed(),
 		TTFTSeconds: jsonRange{ttft.Min, ttft.P50, ttft.Max},

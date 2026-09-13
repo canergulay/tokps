@@ -17,7 +17,8 @@ func (g Gate) Enabled() bool { return g.MinTPS > 0 || g.MaxTTFT > 0 }
 
 // Check returns one human-readable failure per violated threshold, or an
 // empty slice when s passes. Thresholds are inclusive. A summary with no
-// successful stream fails outright.
+// successful stream fails outright, and a TTFT threshold fails when the
+// response was not streamed.
 func (g Gate) Check(s Summary) []string {
 	if !g.Enabled() {
 		return nil
@@ -32,8 +33,13 @@ func (g Gate) Check(s Summary) []string {
 		}
 	}
 	if g.MaxTTFT > 0 {
-		if ttft, limit := s.TTFT().P50, g.MaxTTFT.Seconds(); ttft > limit {
-			fails = append(fails, fmt.Sprintf("TTFT p50 %.2fs > max %.2fs", ttft, limit))
+		switch {
+		case !s.Streamed():
+			fails = append(fails, "TTFT unavailable (non-streaming response)")
+		default:
+			if ttft, limit := s.TTFT().P50, g.MaxTTFT.Seconds(); ttft > limit {
+				fails = append(fails, fmt.Sprintf("TTFT p50 %.2fs > max %.2fs", ttft, limit))
+			}
 		}
 	}
 	return fails

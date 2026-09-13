@@ -240,6 +240,14 @@ func TestRunGateFailureExits3(t *testing.T) {
 	if !strings.Contains(out.String(), "TPS") {
 		t.Errorf("stdout should still carry the report:\n%s", out.String())
 	}
+
+	// --quiet silences progress and warnings, never gate failures.
+	out.Reset()
+	errb.Reset()
+	code = run([]string{"--url=" + ts.URL, "--model=m", "--runs=2", "--warmup=0", "--min-tps=1e12", "--quiet"}, &out, &errb)
+	if code != 3 || !strings.Contains(errb.String(), "FAIL: TPS p50") {
+		t.Errorf("--quiet: exit=%d stderr=%q, want exit 3 with the FAIL line", code, errb.String())
+	}
 }
 
 func TestRunGatePassExits0(t *testing.T) {

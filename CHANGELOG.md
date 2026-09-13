@@ -21,8 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   measured runs reuse. Previously the default two-idle-connections-per-host limit
   meant high-concurrency batches paid TCP/TLS setup that warmup is meant to
   absorb, skewing the numbers.
-- `FormatSummary` no longer falls back to the single-shot block when only one
-  of several runs survived; it shows the percentile block plus the errors line.
+- The text summary no longer drops to the single-shot block when only one of
+  several runs survived; it shows the percentile block plus the `errors` line.
 
 ### Added
 - Warmup + repeated measurement: `--runs` (default 5) timed requests after

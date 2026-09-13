@@ -19,7 +19,7 @@ type Summary struct {
 	Concurrency int           // streams fired in parallel per run (1 = sequential)
 	CostIn      float64       // USD per 1M input tokens (0 = not configured)
 	CostOut     float64       // USD per 1M output tokens (0 = not configured)
-	Results     []Result      // every measured stream (runs × concurrency), in order
+	Results     []Result      // every successful measured stream, in order
 	BatchTPS    []float64     // aggregate tok/s per run (total output tokens ÷ batch wall)
 	Streams     int           // measured streams attempted (runs × concurrency); 0 if warmup failed
 	Errors      []StreamError // streams that failed (Batch 0 = warmup)
@@ -75,7 +75,9 @@ func RunN(ctx context.Context, cfg Config, runs, warmup, concurrency int) (Summa
 			if ctx.Err() != nil {
 				return Summary{}, &InterruptedError{Completed: 0}
 			}
-			sum.Errors = append(sum.Errors, newStreamError(0, errs[0]))
+			for _, err := range errs {
+				sum.Errors = append(sum.Errors, newStreamError(0, err))
+			}
 			return sum, fmt.Errorf("warmup batch %d: %w", i+1, errs[0])
 		}
 		cfg.progress(ProgressEvent{Phase: "warmup", Index: i + 1, Total: warmup, Concurrency: concurrency})

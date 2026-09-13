@@ -98,7 +98,7 @@ func parseFlags(args []string, stderr io.Writer) (*options, []string, int) {
 	opts := &options{}
 
 	fs.StringVar(&opts.url, "url", "", "Base URL of the OpenAI-compatible endpoint (required)")
-	fs.StringVar(&opts.model, "model", "", "Model name (required)")
+	fs.StringVar(&opts.model, "model", "", "Model name (required); a comma-separated list benchmarks each and prints a comparison table")
 	fs.StringVar(&opts.apiKey, "api-key", "", "API key (defaults to the API_KEY env var, then OPENAI_API_KEY)")
 	fs.StringVar(&opts.prompt, "prompt", defaultPrompt, "Test prompt to send")
 	fs.IntVar(&opts.maxTokens, "max-tokens", 512, "Maximum output tokens")

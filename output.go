@@ -41,8 +41,10 @@ func checkGates(gate bench.Gate, sums []bench.Summary, labelOf func(bench.Summar
 	return failed
 }
 
+// noLabel is the gate-label function for a plain single-endpoint run.
 func noLabel(bench.Summary) string { return "" }
 
+// levelLabel prefixes sweep gate failures with their concurrency level.
 func levelLabel(s bench.Summary) string { return fmt.Sprintf("c=%d", s.Concurrency) }
 
 // modelLabel names a gate failure by its model, for --model a,b comparisons.

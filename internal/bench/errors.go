@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"unicode/utf8"
 )
 
@@ -17,6 +18,12 @@ type InterruptedError struct {
 
 func (e *InterruptedError) Error() string {
 	return fmt.Sprintf("interrupted after %d measured batch(es)", e.Completed)
+}
+
+// isInterrupted reports whether err wraps an *InterruptedError.
+func isInterrupted(err error) bool {
+	var ie *InterruptedError
+	return errors.As(err, &ie)
 }
 
 // HTTPError is returned by Run when the endpoint answers with a non-2xx
@@ -42,10 +49,17 @@ type StreamError struct {
 	Err    string
 }
 
+// maxErrRunes caps the error text stored per failed stream so JSON output
+// stays bounded when providers return large HTML error pages.
+const maxErrRunes = 512
+
 // newStreamError captures err for the given batch, lifting the HTTP status
 // out of an *HTTPError when there is one.
 func newStreamError(batch int, err error) StreamError {
 	se := StreamError{Batch: batch, Err: err.Error()}
+	if utf8.RuneCountInString(se.Err) > maxErrRunes {
+		se.Err = string([]rune(se.Err)[:maxErrRunes]) + "…"
+	}
 	var he *HTTPError
 	if errors.As(err, &he) {
 		se.Status = he.Status
@@ -60,7 +74,10 @@ const maxLabelRunes = 60
 // otherwise the (truncated) error text.
 func (e StreamError) label() string {
 	if e.Status > 0 {
-		return fmt.Sprintf("%d %s", e.Status, http.StatusText(e.Status))
+		if text := http.StatusText(e.Status); text != "" {
+			return fmt.Sprintf("%d %s", e.Status, text)
+		}
+		return strconv.Itoa(e.Status)
 	}
 	if utf8.RuneCountInString(e.Err) <= maxLabelRunes {
 		return e.Err

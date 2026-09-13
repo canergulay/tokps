@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestPercentileSortedInterpolates(t *testing.T) {
@@ -427,6 +428,9 @@ func TestSummaryErrorGroupsSortsByCountThenLabel(t *testing.T) {
 	if l := long.ErrorGroups()[0].Label; len([]rune(l)) != 61 || !strings.HasSuffix(l, "…") {
 		t.Errorf("long label = %q, want 60 runes + ellipsis", l)
 	}
+	if l := (Summary{Errors: []StreamError{{Status: 529}}}).ErrorGroups()[0].Label; l != "529" {
+		t.Errorf("non-standard status label = %q, want bare \"529\"", l)
+	}
 }
 
 func TestSummaryStreamCountFallsBackForHandBuiltSummaries(t *testing.T) {
@@ -504,5 +508,15 @@ func TestRunSweepInterruptionAborts(t *testing.T) {
 	var ie *InterruptedError
 	if !errors.As(err, &ie) {
 		t.Fatalf("error = %v, want *InterruptedError", err)
+	}
+}
+
+func TestNewStreamErrorCapsText(t *testing.T) {
+	se := newStreamError(1, errors.New(strings.Repeat("x", 600)))
+	if n := utf8.RuneCountInString(se.Err); n != maxErrRunes+1 || !strings.HasSuffix(se.Err, "…") {
+		t.Errorf("Err runes = %d, want %d + ellipsis", n, maxErrRunes+1)
+	}
+	if se.Status != 0 {
+		t.Errorf("Status = %d, want 0 for a non-HTTP error", se.Status)
 	}
 }

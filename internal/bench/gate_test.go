@@ -29,4 +29,12 @@ func TestGateCheck(t *testing.T) {
 	if got := (Gate{MinTPS: 1}).Check(failed); len(got) != 1 || got[0] != "no successful streams" {
 		t.Errorf("all-failed gate = %q, want [no successful streams]", got)
 	}
+
+	nonStreamed := Summary{Results: []Result{{OutputTokens: 50, TotalWall: time.Second}}}
+	if got := (Gate{MaxTTFT: time.Second}).Check(nonStreamed); len(got) != 1 || got[0] != "TTFT unavailable (non-streaming response)" {
+		t.Errorf("non-streamed TTFT gate = %q, want [TTFT unavailable (non-streaming response)]", got)
+	}
+	if got := (Gate{MinTPS: 1}).Check(nonStreamed); len(got) != 0 {
+		t.Errorf("non-streamed TPS-only gate = %q, want none (TPS falls back to e2e)", got)
+	}
 }
