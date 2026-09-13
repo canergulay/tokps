@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/canergulay/tokps/internal/bench"
+	"github.com/canergulay/tokps/internal/report"
 )
 
 // exitGateFailed is returned when a --min-tps / --max-ttft threshold fails.
@@ -46,3 +47,42 @@ func levelLabel(s bench.Summary) string { return fmt.Sprintf("c=%d", s.Concurren
 
 // modelLabel names a gate failure by its model, for --model a,b comparisons.
 func modelLabel(s bench.Summary) string { return s.Model }
+
+// writeSummary renders one benchmark in the selected format.
+func writeSummary(w io.Writer, s bench.Summary, opts *options) error {
+	switch {
+	case opts.jsonOut:
+		return report.FormatJSON(w, s)
+	case opts.md:
+		report.FormatMarkdown(w, s, opts.detail)
+	default:
+		report.FormatSummary(w, s, opts.detail)
+	}
+	return nil
+}
+
+// writeSweep renders the concurrency curve in the selected format.
+func writeSweep(w io.Writer, sums []bench.Summary, opts *options) error {
+	switch {
+	case opts.jsonOut:
+		return report.FormatSweepJSON(w, sums)
+	case opts.md:
+		report.FormatSweepMarkdown(w, sums)
+	default:
+		report.FormatSweep(w, sums)
+	}
+	return nil
+}
+
+// writeCompare renders the model comparison in the selected format.
+func writeCompare(w io.Writer, sums []bench.Summary, opts *options) error {
+	switch {
+	case opts.jsonOut:
+		return report.FormatCompareJSON(w, sums)
+	case opts.md:
+		report.FormatCompareMarkdown(w, sums)
+	default:
+		report.FormatCompare(w, sums)
+	}
+	return nil
+}

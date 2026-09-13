@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/canergulay/tokps/internal/bench"
-	"github.com/canergulay/tokps/internal/report"
 )
 
 const defaultPrompt = "Write a detailed explanation of how TCP congestion control works, " +
@@ -75,19 +74,19 @@ func (s *sweepValue) Set(v string) error {
 func (s *sweepValue) IsBoolFlag() bool { return true }
 
 type options struct {
-	url, model, apiKey, prompt   string
-	maxTokens                    int
-	maxTokensField               string
-	timeout                      time.Duration
-	runs, warmup, concurrency    int
-	sweep                        sweepValue
-	detail, jsonOut, showVersion bool
-	quiet                        bool
-	costIn, costOut              float64
-	charsPerToken                float64
-	extraBody                    string
-	minTPS                       float64
-	maxTTFT                      time.Duration
+	url, model, apiKey, prompt       string
+	maxTokens                        int
+	maxTokensField                   string
+	timeout                          time.Duration
+	runs, warmup, concurrency        int
+	sweep                            sweepValue
+	detail, jsonOut, md, showVersion bool
+	quiet                            bool
+	costIn, costOut                  float64
+	charsPerToken                    float64
+	extraBody                        string
+	minTPS                           float64
+	maxTTFT                          time.Duration
 }
 
 // parseFlags defines and parses the CLI flags. It returns the parsed options,
@@ -111,6 +110,7 @@ func parseFlags(args []string, stderr io.Writer) (*options, []string, int) {
 	fs.Var(&opts.sweep, "sweep", "Sweep concurrency levels: bare --sweep = 1,2,4,8, or --sweep=1,2,4,8")
 	fs.BoolVar(&opts.detail, "detail", false, "Show extra detail (inter-chunk latency p50/p95)")
 	fs.BoolVar(&opts.jsonOut, "json", false, "Emit machine-readable JSON instead of the text summary")
+	fs.BoolVar(&opts.md, "md", false, "Emit a GitHub-flavored markdown table instead of the text summary")
 	fs.BoolVar(&opts.showVersion, "version", false, "Print version and exit")
 	fs.Float64Var(&opts.costIn, "cost-in", 0, "Input token price in USD per 1M tokens (adds a per-request cost line)")
 	fs.Float64Var(&opts.costOut, "cost-out", 0, "Output token price in USD per 1M tokens (adds a per-request cost line)")
@@ -187,6 +187,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if len(models) > 1 && opts.sweep.enabled {
 		fmt.Fprintln(stderr, "error: --sweep and a multi-model --model cannot be combined")
+		return 2
+	}
+	if opts.md && opts.jsonOut {
+		fmt.Fprintln(stderr, "error: --md and --json cannot be combined")
 		return 2
 	}
 	if len(leftovers) > 0 {
@@ -269,13 +273,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return reportErr(err, stderr, opts.runs)
 		}
-		if opts.jsonOut {
-			if err := report.FormatSweepJSON(stdout, sums); err != nil {
-				fmt.Fprintf(stderr, "error: %v\n", err)
-				return 1
-			}
-		} else {
-			report.FormatSweep(stdout, sums)
+		if err := writeSweep(stdout, sums, opts); err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
 		}
 		if checkGates(gate, sums, levelLabel, stderr) {
 			return exitGateFailed
@@ -288,13 +288,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return reportErr(err, stderr, opts.runs)
 		}
-		if opts.jsonOut {
-			if err := report.FormatCompareJSON(stdout, sums); err != nil {
-				fmt.Fprintf(stderr, "error: %v\n", err)
-				return 1
-			}
-		} else {
-			report.FormatCompare(stdout, sums)
+		if err := writeCompare(stdout, sums, opts); err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
 		}
 		if checkGates(gate, sums, modelLabel, stderr) {
 			return exitGateFailed
@@ -306,13 +302,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return reportErr(err, stderr, opts.runs)
 	}
-	if opts.jsonOut {
-		if err := report.FormatJSON(stdout, sum); err != nil {
-			fmt.Fprintf(stderr, "error: %v\n", err)
-			return 1
-		}
-	} else {
-		report.FormatSummary(stdout, sum, opts.detail)
+	if err := writeSummary(stdout, sum, opts); err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
 	}
 	if checkGates(gate, []bench.Summary{sum}, noLabel, stderr) {
 		return exitGateFailed

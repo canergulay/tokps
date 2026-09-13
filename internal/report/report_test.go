@@ -501,3 +501,98 @@ func TestFormatCompareJSONIsArrayOfSummaries(t *testing.T) {
 		t.Errorf("failed model JSON = %v, want errors=1 and runs_detail=[]", arr[1])
 	}
 }
+
+func TestFormatMarkdownSummaryTable(t *testing.T) {
+	s := bench.Summary{
+		Model: "glm-5.2", Host: "api.z.ai", Warmup: 1, Streams: 3, BatchTPS: []float64{70, 0, 76}, CostIn: 1, CostOut: 2,
+		Results: []bench.Result{
+			{PromptTokens: 39, OutputTokens: 200, Streamed: true, TokensExact: true, TTFT: 2600 * time.Millisecond, GenTime: 2700 * time.Millisecond, TotalWall: 5300 * time.Millisecond, Cost: 0.0013,
+				ITL: []time.Duration{10 * time.Millisecond, 20 * time.Millisecond}},
+			{PromptTokens: 39, OutputTokens: 200, Streamed: true, TokensExact: true, TTFT: 2800 * time.Millisecond, GenTime: 2900 * time.Millisecond, TotalWall: 5700 * time.Millisecond, Cost: 0.0013},
+		},
+		Errors: []bench.StreamError{{Batch: 2, Status: 429, Err: "x"}},
+	}
+	var buf bytes.Buffer
+	FormatMarkdown(&buf, s, true)
+	out := buf.String()
+	for _, want := range []string{
+		"**tokps — glm-5.2 @ api.z.ai** (3 runs, 1 warmup)",
+		"| metric | p50 | min | max |",
+		"|---|---|---|---|",
+		"| TTFT | 2.70s | 2.60s | 2.80s |",
+		"| TPS (gen) |",
+		"| e2e tok/s |",
+		"| ITL | p50 15.0ms, p95 19.5ms | | |",
+		"| output tokens | 200 (exact) | | |",
+		"| cost/req | $0.0013 | | |",
+		"| errors | 1/3 streams (429 Too Many Requests ×1) | | |",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("markdown missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "aggregate") {
+		t.Errorf("non-concurrent markdown should not show aggregate:\n%s", out)
+	}
+
+	s.Concurrency = 4
+	buf.Reset()
+	FormatMarkdown(&buf, s, false)
+	if !strings.Contains(buf.String(), "(concurrency 4, 3 runs, 1 warmup)") || !strings.Contains(buf.String(), "| aggregate tok/s |") || strings.Contains(buf.String(), "| ITL |") {
+		t.Errorf("concurrent markdown without detail: want concurrency header + aggregate row, no ITL:\n%s", buf.String())
+	}
+}
+
+func TestFormatMarkdownSingleRun(t *testing.T) {
+	s := bench.Summary{Model: "local", Host: "localhost:1234",
+		Results: []bench.Result{{PromptTokens: 5, OutputTokens: 50, TokensExact: true, Streamed: true, TTFT: time.Second, GenTime: 2 * time.Second, TotalWall: 3 * time.Second}}}
+	var buf bytes.Buffer
+	FormatMarkdown(&buf, s, false)
+	out := buf.String()
+	for _, want := range []string{"**tokps — local @ localhost:1234**", "| metric | value |", "|---|---|", "| prompt tokens | 5 |", "| output tokens | 50 (exact) |", "| time to first | 1.00 s |", "| TPS (generation) | 24.5 tok/s |", "| end-to-end | 16.7 tok/s |"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("single-run markdown missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "p50") {
+		t.Errorf("single run should not show percentiles:\n%s", out)
+	}
+}
+
+func TestFormatSweepMarkdown(t *testing.T) {
+	sums := []bench.Summary{
+		{Model: "m", Host: "h", Warmup: 1, Concurrency: 1, Streams: 1, BatchTPS: []float64{73}, Results: []bench.Result{okResult(time.Second, 2*time.Second, 3*time.Second)}},
+		{Model: "m", Host: "h", Warmup: 1, Concurrency: 8, Streams: 8, BatchTPS: []float64{0}, Errors: repeatErr(8, bench.StreamError{Batch: 1, Status: 429, Err: "x"})},
+	}
+	var buf bytes.Buffer
+	FormatSweepMarkdown(&buf, sums)
+	out := buf.String()
+	for _, want := range []string{"**tokps — m @ h** (sweep, 1 runs, 1 warmup)", "| concurrency | aggregate tok/s (range) | TTFT p50 (range) | TPS p50/stream | errors |", "|---|---|---|---|---|", "| 1 | 73.0 (73.0–73.0) | 1.00s (1.00s–1.00s) | 49.5 | – |", "| 8 | failed (429 Too Many Requests ×8) | | | |"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("sweep markdown missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestFormatCompareMarkdown(t *testing.T) {
+	sums := []bench.Summary{
+		{Model: "a", Host: "h", Warmup: 1, CostIn: 1, Streams: 1, BatchTPS: []float64{50}, Results: []bench.Result{okResult(time.Second, 2*time.Second, 3*time.Second)}},
+		{Model: "b", Host: "h", Warmup: 1, CostIn: 1, Streams: 1, BatchTPS: []float64{0}, Errors: []bench.StreamError{{Batch: 1, Status: 404, Err: "x"}}},
+	}
+	var buf bytes.Buffer
+	FormatCompareMarkdown(&buf, sums)
+	out := buf.String()
+	for _, want := range []string{"**tokps — compare @ h  (1 runs, 1 warmup)**", "| model | TTFT p50 | TPS p50 (range) | e2e p50 | cost/req | errors |", "|---|---|---|---|---|---|", "| a | 1.00s | 49.5 (49.5–49.5) | 33.3 |", "| b | failed (404 Not Found ×1) | | | | |"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("compare markdown missing %q:\n%s", want, out)
+		}
+	}
+	for i := range sums {
+		sums[i].CostIn = 0
+	}
+	buf.Reset()
+	FormatCompareMarkdown(&buf, sums)
+	if strings.Contains(buf.String(), "cost/req") || !strings.Contains(buf.String(), "| b | failed (404 Not Found ×1) | | | |") {
+		t.Errorf("without cost: no cost column, failed row spans 5 cells:\n%s", buf.String())
+	}
+}

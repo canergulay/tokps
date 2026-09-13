@@ -329,3 +329,39 @@ func TestRunCompareEndToEnd(t *testing.T) {
 		t.Errorf("compare gates: exit=%d stderr=%q, want exit 3 with per-model FAIL lines", code, errb.String())
 	}
 }
+
+func TestRunRejectsMdWithJSON(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"--url=http://x", "--model=m", "--md", "--json"}, &out, &errb); code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+	if !strings.Contains(errb.String(), "--md") || !strings.Contains(errb.String(), "--json") {
+		t.Errorf("stderr = %q, want the --md/--json conflict error", errb.String())
+	}
+}
+
+func TestRunMdEndToEnd(t *testing.T) {
+	ts := fakeServer(t)
+	defer ts.Close()
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"summary", []string{"--runs=2", "--warmup=0", "--md"}, "| metric | p50 | min | max |"},
+		{"single", []string{"--runs=1", "--warmup=0", "--md"}, "| metric | value |"},
+		{"sweep", []string{"--runs=1", "--warmup=0", "--sweep=1,2", "--md"}, "| concurrency |"},
+		{"compare", []string{"--runs=1", "--warmup=0", "--model=a,b", "--md"}, "| model |"},
+	}
+	for _, c := range cases {
+		var out, errb bytes.Buffer
+		args := append([]string{"--url=" + ts.URL, "--model=m"}, c.args...)
+		if code := run(args, &out, &errb); code != 0 {
+			t.Errorf("%s: exit = %d, want 0; stderr=%s", c.name, code, errb.String())
+			continue
+		}
+		if !strings.HasPrefix(out.String(), "**tokps") || !strings.Contains(out.String(), c.want) {
+			t.Errorf("%s: stdout = %q, want markdown containing %q", c.name, out.String(), c.want)
+		}
+	}
+}

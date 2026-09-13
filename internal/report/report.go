@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/canergulay/tokps/internal/bench"
@@ -265,7 +266,8 @@ func dur(d time.Duration) string {
 	return fmt.Sprintf("%.2f s", d.Seconds())
 }
 
-// usd formats a dollar amount with precision that suits its magnitude.
+// usd formats a dollar amount with precision that suits its magnitude,
+// trimming insignificant trailing zeros off sub-cent values.
 func usd(v float64) string {
 	if v >= 1 {
 		return fmt.Sprintf("$%.2f", v)
@@ -273,7 +275,8 @@ func usd(v float64) string {
 	if v >= 0.01 {
 		return fmt.Sprintf("$%.4f", v)
 	}
-	return fmt.Sprintf("$%.6f", v)
+	s := strings.TrimRight(fmt.Sprintf("%.6f", v), "0")
+	return "$" + strings.TrimSuffix(s, ".")
 }
 
 func secs(s float64) string {
