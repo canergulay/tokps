@@ -438,3 +438,66 @@ func TestFormatSweepRendersFailedLevelAndErrorsColumn(t *testing.T) {
 		t.Errorf("partial level error_rate = %v, want 0.5", arr[1]["error_rate"])
 	}
 }
+
+func TestFormatCompareShowsOneRowPerModel(t *testing.T) {
+	sums := []bench.Summary{
+		{Model: "glm-5.2", Host: "api.z.ai", Warmup: 1, CostIn: 1, CostOut: 2, Streams: 2, BatchTPS: []float64{70, 76},
+			Results: []bench.Result{
+				{OutputTokens: 200, Streamed: true, TokensExact: true, TTFT: 2600 * time.Millisecond, GenTime: 2700 * time.Millisecond, TotalWall: 5300 * time.Millisecond, Cost: 0.0013},
+				{OutputTokens: 200, Streamed: true, TokensExact: true, TTFT: 2800 * time.Millisecond, GenTime: 2900 * time.Millisecond, TotalWall: 5700 * time.Millisecond, Cost: 0.0013},
+			}},
+		{Model: "glm-5-flash", Host: "api.z.ai", Warmup: 1, CostIn: 1, CostOut: 2, Streams: 2, BatchTPS: []float64{110, 120},
+			Results: []bench.Result{
+				{OutputTokens: 200, Streamed: true, TokensExact: true, TTFT: 400 * time.Millisecond, GenTime: 1700 * time.Millisecond, TotalWall: 2100 * time.Millisecond, Cost: 0.0002},
+				{OutputTokens: 200, Streamed: true, TokensExact: true, TTFT: 420 * time.Millisecond, GenTime: 1800 * time.Millisecond, TotalWall: 2220 * time.Millisecond, Cost: 0.0002},
+			}},
+		{Model: "typo-model", Host: "api.z.ai", Warmup: 1, Streams: 2, BatchTPS: []float64{0, 0},
+			Errors: repeatErr(2, bench.StreamError{Batch: 1, Status: 404, Err: "x"})},
+	}
+	var buf bytes.Buffer
+	FormatCompare(&buf, sums)
+	out := buf.String()
+	for _, want := range []string{"compare @ api.z.ai", "2 runs, 1 warmup", "model", "TTFT p50", "TPS p50 (range)", "e2e p50", "cost/req", "errors",
+		"glm-5.2", "glm-5-flash", "$0.0013", "$0.0002", "failed (404 Not Found ×2)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("compare output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "concurrency") {
+		t.Errorf("non-concurrent compare should not mention concurrency:\n%s", out)
+	}
+
+	// Without cost configured the column disappears; with concurrency the header says so.
+	for i := range sums {
+		sums[i].CostIn, sums[i].CostOut, sums[i].Concurrency = 0, 0, 4
+	}
+	buf.Reset()
+	FormatCompare(&buf, sums)
+	if strings.Contains(buf.String(), "cost/req") || !strings.Contains(buf.String(), "concurrency 4") {
+		t.Errorf("expected no cost column and a concurrency header:\n%s", buf.String())
+	}
+}
+
+func TestFormatCompareJSONIsArrayOfSummaries(t *testing.T) {
+	sums := []bench.Summary{
+		{Model: "a", Host: "h", Streams: 1, BatchTPS: []float64{50}, Results: []bench.Result{okResult(time.Second, 2*time.Second, 3*time.Second)}},
+		{Model: "b", Host: "h", Streams: 1, BatchTPS: []float64{0}, Errors: []bench.StreamError{{Batch: 1, Status: 404, Err: "x"}}},
+	}
+	var buf bytes.Buffer
+	if err := FormatCompareJSON(&buf, sums); err != nil {
+		t.Fatalf("FormatCompareJSON error: %v", err)
+	}
+	var arr []map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &arr); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(arr) != 2 || arr[0]["model"] != "a" || arr[1]["model"] != "b" {
+		t.Fatalf("array = %v, want models a,b", arr)
+	}
+	if arr[0]["tps"].(map[string]any)["p50"] == nil {
+		t.Errorf("entries should have the same shape as --json: %v", arr[0])
+	}
+	if arr[1]["errors"].(float64) != 1 || arr[1]["runs_detail"] == nil {
+		t.Errorf("failed model JSON = %v, want errors=1 and runs_detail=[]", arr[1])
+	}
+}

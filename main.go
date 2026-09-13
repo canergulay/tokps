@@ -180,6 +180,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "error: --url and --model are required")
 		return 2
 	}
+	models, err := bench.ParseModels(opts.model)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: --model: %v\n", err)
+		return 2
+	}
+	if len(models) > 1 && opts.sweep.enabled {
+		fmt.Fprintln(stderr, "error: --sweep and a multi-model --model cannot be combined")
+		return 2
+	}
 	if len(leftovers) > 0 {
 		if looksLikeLevels(leftovers[0]) {
 			fmt.Fprintf(stderr, "error: unexpected argument %q — use --sweep=%s\n", leftovers[0], leftovers[0])
@@ -229,7 +238,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	cfg := bench.Config{
 		URL:            opts.url,
-		Model:          opts.model,
+		Model:          models[0],
 		APIKey:         key,
 		Prompt:         opts.prompt,
 		MaxTokens:      opts.maxTokens,
@@ -269,6 +278,25 @@ func run(args []string, stdout, stderr io.Writer) int {
 			report.FormatSweep(stdout, sums)
 		}
 		if checkGates(gate, sums, levelLabel, stderr) {
+			return exitGateFailed
+		}
+		return 0
+	}
+
+	if len(models) > 1 {
+		sums, err := bench.RunCompare(ctx, cfg, models, opts.runs, opts.warmup, opts.concurrency)
+		if err != nil {
+			return reportErr(err, stderr, opts.runs)
+		}
+		if opts.jsonOut {
+			if err := report.FormatCompareJSON(stdout, sums); err != nil {
+				fmt.Fprintf(stderr, "error: %v\n", err)
+				return 1
+			}
+		} else {
+			report.FormatCompare(stdout, sums)
+		}
+		if checkGates(gate, sums, modelLabel, stderr) {
 			return exitGateFailed
 		}
 		return 0

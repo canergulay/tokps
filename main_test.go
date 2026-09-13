@@ -279,3 +279,53 @@ func TestRunRejectsNegativeGate(t *testing.T) {
 		}
 	}
 }
+
+func TestRunRejectsCompareWithSweep(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := run([]string{"--url=http://x", "--model=a,b", "--sweep"}, &out, &errb)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+	if !strings.Contains(errb.String(), "--sweep") || !strings.Contains(errb.String(), "--model") {
+		t.Errorf("stderr = %q, want the sweep/compare conflict error", errb.String())
+	}
+}
+
+func TestRunRejectsEmptyModelEntry(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"--url=http://x", "--model=a,,b"}, &out, &errb); code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+	if !strings.Contains(errb.String(), "--model") {
+		t.Errorf("stderr = %q, want it to mention --model", errb.String())
+	}
+}
+
+func TestRunCompareEndToEnd(t *testing.T) {
+	ts := fakeServer(t)
+	defer ts.Close()
+	var out, errb bytes.Buffer
+	code := run([]string{"--url=" + ts.URL, "--model=alpha, beta", "--runs=1", "--warmup=0"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr=%s", code, errb.String())
+	}
+	for _, want := range []string{"compare @", "  alpha ", "  beta "} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("stdout missing %q:\n%s", want, out.String())
+		}
+	}
+
+	out.Reset()
+	errb.Reset()
+	code = run([]string{"--url=" + ts.URL, "--model=alpha,beta", "--runs=1", "--warmup=0", "--json"}, &out, &errb)
+	if code != 0 || !strings.HasPrefix(strings.TrimSpace(out.String()), "[") {
+		t.Errorf("--json compare: exit=%d stdout=%q, want a JSON array", code, out.String())
+	}
+
+	out.Reset()
+	errb.Reset()
+	code = run([]string{"--url=" + ts.URL, "--model=alpha,beta", "--runs=1", "--warmup=0", "--min-tps=1e12"}, &out, &errb)
+	if code != 3 || !strings.Contains(errb.String(), "FAIL: alpha TPS p50") || !strings.Contains(errb.String(), "FAIL: beta TPS p50") {
+		t.Errorf("compare gates: exit=%d stderr=%q, want exit 3 with per-model FAIL lines", code, errb.String())
+	}
+}
