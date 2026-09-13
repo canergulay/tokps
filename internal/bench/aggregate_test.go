@@ -438,3 +438,71 @@ func TestSummaryStreamCountFallsBackForHandBuiltSummaries(t *testing.T) {
 		t.Errorf("ErrorRate of empty = %v, want 0", got)
 	}
 }
+
+func TestRunSweepKeepsFailedLevelAsRow(t *testing.T) {
+	// Level 1 (1 warmup + 1 run = 2 calls) succeeds; every request after
+	// that — level 4's warmup — is 429'd, the usual hosted-API behavior
+	// under load. The curve must keep both rows.
+	ts, _ := scriptedServer(t, func(n int) bool { return n > 2 })
+	defer ts.Close()
+
+	sums, err := RunSweep(context.Background(), testConfig(ts.URL), 1, 1, []int{1, 4})
+	if err != nil {
+		t.Fatalf("RunSweep error: %v, want nil (a later level's failure is a row)", err)
+	}
+	if len(sums) != 2 {
+		t.Fatalf("summaries = %d, want 2", len(sums))
+	}
+	if sums[0].Failed() != 0 || len(sums[0].Results) != 1 {
+		t.Errorf("level 1: failed=%d results=%d, want 0/1", sums[0].Failed(), len(sums[0].Results))
+	}
+	if !sums[1].AllFailed() || sums[1].Concurrency != 4 {
+		t.Errorf("level 4 should be a failed row with Concurrency=4: %+v", sums[1])
+	}
+	if g := sums[1].ErrorGroups(); len(g) != 1 || g[0].Label != "429 Too Many Requests" {
+		t.Errorf("level 4 groups = %+v, want one 429 group", g)
+	}
+}
+
+func TestRunSweepFirstLevelFailureAborts(t *testing.T) {
+	ts, _ := scriptedServer(t, func(int) bool { return true })
+	defer ts.Close()
+
+	if _, err := RunSweep(context.Background(), testConfig(ts.URL), 1, 0, []int{1, 2}); err == nil {
+		t.Fatal("expected the canary level's failure to abort the sweep")
+	}
+}
+
+func TestRunSweepStampsProgressLabel(t *testing.T) {
+	ts, _ := scriptedServer(t, func(int) bool { return false })
+	defer ts.Close()
+
+	cfg := testConfig(ts.URL)
+	var labels []string
+	cfg.Progress = func(ev ProgressEvent) { labels = append(labels, ev.Label) }
+	if _, err := RunSweep(context.Background(), cfg, 1, 0, []int{1, 2}); err != nil {
+		t.Fatalf("RunSweep error: %v", err)
+	}
+	if strings.Join(labels, ",") != "c=1,c=2" {
+		t.Errorf("labels = %v, want [c=1 c=2]", labels)
+	}
+}
+
+func TestRunSweepInterruptionAborts(t *testing.T) {
+	ts, _ := scriptedServer(t, func(int) bool { return false })
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cfg := testConfig(ts.URL)
+	// Cancel once the first level has finished, so level 2 sees a dead ctx.
+	cfg.Progress = func(ev ProgressEvent) {
+		if ev.Label == "c=1" {
+			cancel()
+		}
+	}
+	_, err := RunSweep(ctx, cfg, 1, 0, []int{1, 2})
+	var ie *InterruptedError
+	if !errors.As(err, &ie) {
+		t.Fatalf("error = %v, want *InterruptedError", err)
+	}
+}

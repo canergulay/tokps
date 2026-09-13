@@ -129,11 +129,16 @@ func ParseLevels(s string) ([]int, error) {
 
 // RunSweep benchmarks the same endpoint at each concurrency level in turn,
 // returning one Summary per level (the throughput-vs-load curve).
+//
+// The first level is the canary: any error there aborts, so auth and URL
+// problems fail fast. A later level that fails — typically a 429'd warmup
+// under load — is kept as a failed Summary (AllFailed() == true) so the
+// curve measured so far is not lost. Interruption always aborts.
 func RunSweep(ctx context.Context, cfg Config, runs, warmup int, levels []int) ([]Summary, error) {
 	sums := make([]Summary, 0, len(levels))
-	for _, c := range levels {
-		s, err := RunN(ctx, cfg, runs, warmup, c)
-		if err != nil {
+	for i, c := range levels {
+		s, err := RunN(ctx, withLabel(cfg, fmt.Sprintf("c=%d", c)), runs, warmup, c)
+		if err != nil && (i == 0 || isInterrupted(err)) {
 			return nil, fmt.Errorf("concurrency %d: %w", c, err)
 		}
 		sums = append(sums, s)
