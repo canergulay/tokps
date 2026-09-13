@@ -20,11 +20,7 @@ func Format(w io.Writer, r bench.Result) {
 		fmt.Fprintf(w, "  prompt tokens     n/a\n")
 	}
 
-	label := "exact"
-	if !r.TokensExact {
-		label = "estimated"
-	}
-	fmt.Fprintf(w, "  output tokens     %d   (%s)\n", r.OutputTokens, label)
+	fmt.Fprintf(w, "  output tokens     %d   (%s)\n", r.OutputTokens, exactLabel(r.TokensExact))
 
 	if r.Streamed {
 		fmt.Fprintf(w, "  time to first     %s\n", dur(r.TTFT))
@@ -48,12 +44,13 @@ func Format(w io.Writer, r bench.Result) {
 // run falls back to the detailed single-shot block, where percentiles would be
 // meaningless. When detail is set, an inter-token-latency (ITL) line is added.
 func FormatSummary(w io.Writer, s bench.Summary, detail bool) {
-	if len(s.Results) <= 1 {
-		if len(s.Results) == 1 {
-			Format(w, s.Results[0])
-			if detail {
-				writeITL(w, s)
-			}
+	if len(s.Results) == 0 {
+		return
+	}
+	if len(s.Results) == 1 && s.Failed() == 0 {
+		Format(w, s.Results[0])
+		if detail {
+			writeITL(w, s)
 		}
 		return
 	}
@@ -71,17 +68,16 @@ func FormatSummary(w io.Writer, s bench.Summary, detail bool) {
 		fmt.Fprintf(w, "  prompt tokens     n/a\n")
 	}
 
-	label := "exact"
-	if !s.Exact() {
-		label = "estimated"
-	}
 	medianNote := "median"
 	if conc {
 		medianNote = "median/stream"
 	}
-	fmt.Fprintf(w, "  output tokens     %d   (%s, %s)\n", s.MedianOutputTokens(), label, medianNote)
+	fmt.Fprintf(w, "  output tokens     %d   (%s, %s)\n", s.MedianOutputTokens(), exactLabel(s.Exact()), medianNote)
 	if s.CostConfigured() {
 		fmt.Fprintf(w, "  cost              %s  (median, per request)\n", usd(s.Cost().P50))
+	}
+	if s.Failed() > 0 {
+		fmt.Fprintf(w, "  errors            %d/%d streams   (%s)\n", s.Failed(), s.StreamCount(), errorGroupsText(s))
 	}
 	fmt.Fprintln(w)
 
@@ -113,99 +109,129 @@ func writeITL(w io.Writer, s bench.Summary) {
 	}
 }
 
-// FormatJSON writes a machine-readable summary of the benchmark to w.
-func FormatJSON(w io.Writer, s bench.Summary) error {
-	type rng struct {
-		Min float64 `json:"min"`
-		P50 float64 `json:"p50"`
-		Max float64 `json:"max"`
-	}
-	type itl struct {
-		P50 float64 `json:"p50"`
-		P95 float64 `json:"p95"`
-	}
-	type run struct {
-		OutputTokens int     `json:"output_tokens"`
-		Exact        bool    `json:"exact"`
-		TTFTSeconds  float64 `json:"ttft_s"`
-		GenSeconds   float64 `json:"gen_s"`
-		WallSeconds  float64 `json:"wall_s"`
-		TPS          float64 `json:"tps"`
-		E2ETPS       float64 `json:"e2e_tps"`
-		CostUsd      float64 `json:"cost_usd"`
-	}
+type jsonRange struct {
+	Min float64 `json:"min"`
+	P50 float64 `json:"p50"`
+	Max float64 `json:"max"`
+}
 
+type jsonITL struct {
+	P50 float64 `json:"p50"`
+	P95 float64 `json:"p95"`
+}
+
+type jsonRun struct {
+	OutputTokens int     `json:"output_tokens"`
+	Exact        bool    `json:"exact"`
+	TTFTSeconds  float64 `json:"ttft_s"`
+	GenSeconds   float64 `json:"gen_s"`
+	WallSeconds  float64 `json:"wall_s"`
+	TPS          float64 `json:"tps"`
+	E2ETPS       float64 `json:"e2e_tps"`
+	CostUsd      float64 `json:"cost_usd"`
+}
+
+type jsonStreamError struct {
+	Batch  int    `json:"batch"`
+	Status int    `json:"status,omitempty"`
+	Error  string `json:"error"`
+}
+
+// summaryJSON is the machine-readable shape of one Summary, shared by --json
+// and the compare array so one consumer handles both.
+type summaryJSON struct {
+	Model              string     `json:"model"`
+	Host               string     `json:"host"`
+	Runs               int        `json:"runs"`
+	Warmup             int        `json:"warmup"`
+	Concurrency        int        `json:"concurrency"`
+	Streams            int        `json:"streams"`
+	Errors             int        `json:"errors"`
+	ErrorRate          float64    `json:"error_rate"`
+	PromptTokens       int        `json:"prompt_tokens"`
+	OutputTokensMedian int        `json:"output_tokens_median"`
+	TokensExact        bool       `json:"tokens_exact"`
+	Streamed           bool       `json:"streamed"`
+	AggregateTPS       *jsonRange `json:"aggregate_tps,omitempty"`
+	TTFTSeconds        jsonRange  `json:"ttft_s"`
+	TPS                jsonRange  `json:"tps"`
+	E2ETPS             jsonRange  `json:"e2e_tps"`
+	CostUsd            *jsonRange `json:"cost_usd,omitempty"`
+	CostInPer1M        float64    `json:"cost_in_per_1m,omitempty"`
+	CostOutPer1M       float64    `json:"cost_out_per_1m,omitempty"`
+	ITLMillis          *jsonITL   `json:"itl_ms,omitempty"`
+	RunsDetail         []jsonRun  `json:"runs_detail"`
+	// ErrorsDetail intentionally has no omitempty: unmarshalling a later,
+	// error-free encode into a map already holding a previous errors_detail
+	// value would otherwise leave the stale entry in place (encoding/json
+	// only overwrites keys present in the new object), so a clean run must
+	// still emit the key with an explicit JSON null.
+	ErrorsDetail []jsonStreamError `json:"errors_detail"`
+}
+
+// toJSON builds the JSON view of s.
+func toJSON(s bench.Summary) summaryJSON {
 	ttft, gen, e2e := s.TTFT(), s.GenTPS(), s.E2ETPS()
-	out := struct {
-		Model              string  `json:"model"`
-		Host               string  `json:"host"`
-		Runs               int     `json:"runs"`
-		Warmup             int     `json:"warmup"`
-		Concurrency        int     `json:"concurrency"`
-		PromptTokens       int     `json:"prompt_tokens"`
-		OutputTokensMedian int     `json:"output_tokens_median"`
-		TokensExact        bool    `json:"tokens_exact"`
-		Streamed           bool    `json:"streamed"`
-		AggregateTPS       *rng    `json:"aggregate_tps,omitempty"`
-		TTFTSeconds        rng     `json:"ttft_s"`
-		TPS                rng     `json:"tps"`
-		E2ETPS             rng     `json:"e2e_tps"`
-		CostUsd            *rng    `json:"cost_usd,omitempty"`
-		CostInPer1M        float64 `json:"cost_in_per_1m,omitempty"`
-		CostOutPer1M       float64 `json:"cost_out_per_1m,omitempty"`
-		ITLMillis          *itl    `json:"itl_ms,omitempty"`
-		RunsDetail         []run   `json:"runs_detail"`
-	}{
+	out := summaryJSON{
 		Model: s.Model, Host: s.Host, Runs: s.RunCount(), Warmup: s.Warmup,
-		Concurrency:  max(s.Concurrency, 1),
+		Concurrency: max(s.Concurrency, 1),
+		Streams:     s.StreamCount(), Errors: s.Failed(), ErrorRate: s.ErrorRate(),
 		PromptTokens: s.PromptTokens(), OutputTokensMedian: s.MedianOutputTokens(),
 		TokensExact: s.Exact(), Streamed: s.Streamed(),
-		TTFTSeconds: rng{ttft.Min, ttft.P50, ttft.Max},
-		TPS:         rng{gen.Min, gen.P50, gen.Max},
-		E2ETPS:      rng{e2e.Min, e2e.P50, e2e.Max},
+		TTFTSeconds: jsonRange{ttft.Min, ttft.P50, ttft.Max},
+		TPS:         jsonRange{gen.Min, gen.P50, gen.Max},
+		E2ETPS:      jsonRange{e2e.Min, e2e.P50, e2e.Max},
+		RunsDetail:  []jsonRun{},
 	}
 	if s.Concurrency > 1 {
 		a := s.AggregateTPS()
-		out.AggregateTPS = &rng{a.Min, a.P50, a.Max}
+		out.AggregateTPS = &jsonRange{a.Min, a.P50, a.Max}
 	}
 	if s.CostConfigured() {
 		c := s.Cost()
-		out.CostUsd = &rng{c.Min, c.P50, c.Max}
+		out.CostUsd = &jsonRange{c.Min, c.P50, c.Max}
 		out.CostInPer1M = s.CostIn
 		out.CostOutPer1M = s.CostOut
 	}
 	if p50, p95, ok := s.ITL(); ok {
-		out.ITLMillis = &itl{P50: p50, P95: p95}
+		out.ITLMillis = &jsonITL{P50: p50, P95: p95}
 	}
 	for _, r := range s.Results {
-		out.RunsDetail = append(out.RunsDetail, run{
+		out.RunsDetail = append(out.RunsDetail, jsonRun{
 			OutputTokens: r.OutputTokens, Exact: r.TokensExact,
 			TTFTSeconds: r.TTFT.Seconds(), GenSeconds: r.GenTime.Seconds(),
 			WallSeconds: r.TotalWall.Seconds(), TPS: r.TPS(), E2ETPS: r.EndToEndTPS(),
 			CostUsd: r.Cost,
 		})
 	}
+	for _, e := range s.Errors {
+		out.ErrorsDetail = append(out.ErrorsDetail, jsonStreamError{Batch: e.Batch, Status: e.Status, Error: e.Err})
+	}
+	return out
+}
 
+// FormatJSON writes a machine-readable summary of the benchmark to w.
+func FormatJSON(w io.Writer, s bench.Summary) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(out)
+	return enc.Encode(toJSON(s))
 }
 
 // FormatSweep writes the throughput-vs-concurrency curve (one row per level).
+// A level with no successful stream renders as a failed row.
 func FormatSweep(w io.Writer, sums []bench.Summary) {
 	if len(sums) == 0 {
 		return
 	}
 	fmt.Fprintf(w, "\ntokps — %s @ %s  (sweep, %d runs, %d warmup)\n\n", sums[0].Model, sums[0].Host, sums[0].RunCount(), sums[0].Warmup)
-	fmt.Fprintf(w, "  %-11s   %-24s   %-22s   %s\n", "concurrency", "aggregate tok/s (range)", "TTFT p50 (range)", "TPS p50/stream")
+	fmt.Fprintf(w, "  %-11s   %-24s   %-22s   %-14s   %s\n", "concurrency", "aggregate tok/s (range)", "TTFT p50 (range)", "TPS p50/stream", "errors")
 	for _, s := range sums {
-		a := s.AggregateTPS()
-		ttft := s.TTFT()
-		fmt.Fprintf(w, "  %-11d   %-24s   %-22s   %.1f\n",
-			s.Concurrency,
-			fmt.Sprintf("%.1f (%.1f–%.1f)", a.P50, a.Min, a.Max),
-			fmt.Sprintf("%s (%s–%s)", secs(ttft.P50), secs(ttft.Min), secs(ttft.Max)),
-			s.GenTPS().P50)
+		if s.AllFailed() {
+			fmt.Fprintf(w, "  %-11d   failed (%s)\n", s.Concurrency, errorGroupsText(s))
+			continue
+		}
+		fmt.Fprintf(w, "  %-11d   %-24s   %-22s   %-14.1f   %s\n",
+			s.Concurrency, aggCell(s), ttftCell(s), s.GenTPS().P50, errorsCell(s))
 	}
 	fmt.Fprintln(w)
 }
@@ -214,6 +240,9 @@ func FormatSweep(w io.Writer, sums []bench.Summary) {
 func FormatSweepJSON(w io.Writer, sums []bench.Summary) error {
 	type level struct {
 		Concurrency    int     `json:"concurrency"`
+		Failed         bool    `json:"failed"`
+		Errors         int     `json:"errors"`
+		ErrorRate      float64 `json:"error_rate"`
 		AggregateTPS   float64 `json:"aggregate_tps"`
 		TTFTP50Seconds float64 `json:"ttft_p50_s"`
 		TPSP50         float64 `json:"tps_p50"`
@@ -223,6 +252,9 @@ func FormatSweepJSON(w io.Writer, sums []bench.Summary) error {
 	for _, s := range sums {
 		arr = append(arr, level{
 			Concurrency:    s.Concurrency,
+			Failed:         s.AllFailed(),
+			Errors:         s.Failed(),
+			ErrorRate:      s.ErrorRate(),
 			AggregateTPS:   s.AggregateTPS().P50,
 			TTFTP50Seconds: s.TTFT().P50,
 			TPSP50:         s.GenTPS().P50,

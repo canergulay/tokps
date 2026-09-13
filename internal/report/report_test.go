@@ -293,3 +293,142 @@ func TestFormatJSONIncludesCostWhenConfigured(t *testing.T) {
 		t.Errorf("cost rates not echoed: %v", m)
 	}
 }
+
+func okResult(ttft, gen, wall time.Duration) bench.Result {
+	return bench.Result{OutputTokens: 100, TokensExact: true, Streamed: true, TTFT: ttft, GenTime: gen, TotalWall: wall}
+}
+
+func repeatErr(n int, e bench.StreamError) []bench.StreamError {
+	out := make([]bench.StreamError, n)
+	for i := range out {
+		out[i] = e
+	}
+	return out
+}
+
+func TestFormatSummaryShowsErrorsLine(t *testing.T) {
+	s := bench.Summary{
+		Model: "m", Host: "h", Streams: 4, BatchTPS: []float64{50, 0, 50, 50},
+		Results: []bench.Result{
+			okResult(time.Second, 2*time.Second, 3*time.Second),
+			okResult(time.Second, 2*time.Second, 3*time.Second),
+			okResult(time.Second, 2*time.Second, 3*time.Second),
+		},
+		Errors: []bench.StreamError{{Batch: 2, Status: 429, Err: "endpoint returned 429 Too Many Requests: slow down"}},
+	}
+	var buf bytes.Buffer
+	FormatSummary(&buf, s, false)
+	out := buf.String()
+	if !strings.Contains(out, "errors            1/4 streams   (429 Too Many Requests ×1)") {
+		t.Errorf("output missing the errors line:\n%s", out)
+	}
+	if !strings.Contains(out, "4 runs") {
+		t.Errorf("run count should count the failed batch:\n%s", out)
+	}
+
+	s.Errors = nil
+	buf.Reset()
+	FormatSummary(&buf, s, false)
+	if strings.Contains(buf.String(), "errors") {
+		t.Errorf("no errors line when nothing failed:\n%s", buf.String())
+	}
+}
+
+func TestFormatSummaryOneSurvivorWithFailuresShowsPercentileBlock(t *testing.T) {
+	s := bench.Summary{
+		Model: "m", Host: "h", Streams: 3, BatchTPS: []float64{0, 50, 0},
+		Results: []bench.Result{okResult(time.Second, 2*time.Second, 3*time.Second)},
+		Errors:  []bench.StreamError{{Batch: 1, Status: 429}, {Batch: 3, Status: 429}},
+	}
+	var buf bytes.Buffer
+	FormatSummary(&buf, s, false)
+	out := buf.String()
+	if !strings.Contains(out, "2/3 streams") {
+		t.Errorf("expected an errors line for 2/3 failures:\n%s", out)
+	}
+	if strings.Contains(out, "time to first") {
+		t.Errorf("must not fall back to the single-shot block when streams failed:\n%s", out)
+	}
+}
+
+func TestFormatSummaryNothingToShowWhenAllFailed(t *testing.T) {
+	var buf bytes.Buffer
+	FormatSummary(&buf, bench.Summary{Streams: 2, Errors: repeatErr(2, bench.StreamError{Status: 500})}, false)
+	if buf.Len() != 0 {
+		t.Errorf("all-failed summary should render nothing (main reports the error):\n%s", buf.String())
+	}
+}
+
+func TestFormatJSONIncludesErrors(t *testing.T) {
+	s := bench.Summary{
+		Model: "m", Host: "h", Streams: 2, BatchTPS: []float64{50, 0},
+		Results: []bench.Result{okResult(time.Second, 2*time.Second, 3*time.Second)},
+		Errors:  []bench.StreamError{{Batch: 2, Status: 429, Err: "endpoint returned 429 Too Many Requests: x"}},
+	}
+	var buf bytes.Buffer
+	if err := FormatJSON(&buf, s); err != nil {
+		t.Fatalf("FormatJSON error: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if m["streams"].(float64) != 2 || m["errors"].(float64) != 1 || m["error_rate"].(float64) != 0.5 {
+		t.Errorf("streams/errors/error_rate = %v/%v/%v, want 2/1/0.5", m["streams"], m["errors"], m["error_rate"])
+	}
+	detail, ok := m["errors_detail"].([]any)
+	if !ok || len(detail) != 1 {
+		t.Fatalf("errors_detail = %v, want one entry", m["errors_detail"])
+	}
+	e := detail[0].(map[string]any)
+	if e["batch"].(float64) != 2 || e["status"].(float64) != 429 || e["error"] == "" {
+		t.Errorf("errors_detail[0] = %v, want batch=2 status=429 error=<text>", e)
+	}
+
+	// No failures: counts are zero and errors_detail is omitted.
+	s.Errors = nil
+	buf.Reset()
+	_ = FormatJSON(&buf, s)
+	_ = json.Unmarshal(buf.Bytes(), &m)
+	if m["errors"].(float64) != 0 || m["errors_detail"] != nil {
+		t.Errorf("clean run JSON = %v, want errors=0 and no errors_detail", m)
+	}
+}
+
+func TestFormatSweepRendersFailedLevelAndErrorsColumn(t *testing.T) {
+	sums := []bench.Summary{
+		{Model: "m", Host: "h", Concurrency: 1, Streams: 1, BatchTPS: []float64{73},
+			Results: []bench.Result{okResult(time.Second, 2*time.Second, 3*time.Second)}},
+		{Model: "m", Host: "h", Concurrency: 4, Streams: 4, BatchTPS: []float64{150},
+			Results: []bench.Result{okResult(time.Second, 2*time.Second, 3*time.Second), okResult(time.Second, 2*time.Second, 3*time.Second)},
+			Errors:  repeatErr(2, bench.StreamError{Batch: 1, Status: 429, Err: "x"})},
+		{Model: "m", Host: "h", Concurrency: 8, Streams: 8, BatchTPS: []float64{0},
+			Errors: repeatErr(8, bench.StreamError{Batch: 1, Status: 429, Err: "x"})},
+	}
+	var buf bytes.Buffer
+	FormatSweep(&buf, sums)
+	out := buf.String()
+	for _, want := range []string{"errors", "failed (429 Too Many Requests ×8)", "2/4"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("sweep output missing %q:\n%s", want, out)
+		}
+	}
+
+	buf.Reset()
+	if err := FormatSweepJSON(&buf, sums); err != nil {
+		t.Fatalf("FormatSweepJSON error: %v", err)
+	}
+	var arr []map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &arr); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if arr[2]["failed"] != true || arr[2]["errors"].(float64) != 8 || arr[2]["error_rate"].(float64) != 1 {
+		t.Errorf("failed level JSON = %v, want failed=true errors=8 error_rate=1", arr[2])
+	}
+	if arr[0]["failed"] != false || arr[0]["errors"].(float64) != 0 || arr[0]["error_rate"].(float64) != 0 {
+		t.Errorf("ok level JSON = %v, want failed=false errors=0", arr[0])
+	}
+	if arr[1]["error_rate"].(float64) != 0.5 {
+		t.Errorf("partial level error_rate = %v, want 0.5", arr[1]["error_rate"])
+	}
+}
