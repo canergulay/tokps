@@ -60,6 +60,11 @@ type Config struct {
 	// CharsPerToken overrides the ~4 chars/token estimate used when a server
 	// omits usage (CJK text is closer to 1.5-2).
 	CharsPerToken float64
+
+	// ExtraBody holds additional request fields merged into the JSON body
+	// (e.g. {"temperature": 0} or provider-specific thinking toggles). Its
+	// keys override the fields tokps sets.
+	ExtraBody map[string]any
 }
 
 type chatMessage struct {
@@ -134,6 +139,19 @@ func requestCost(cfg Config, promptTokens, outputTokens int) float64 {
 	return cost
 }
 
+// overlayJSON merges extra into the JSON object in base. Keys in extra win,
+// so a user can override anything tokps sets (including stream).
+func overlayJSON(base []byte, extra map[string]any) ([]byte, error) {
+	var m map[string]any
+	if err := json.Unmarshal(base, &m); err != nil {
+		return nil, err
+	}
+	for k, v := range extra {
+		m[k] = v
+	}
+	return json.Marshal(m)
+}
+
 // Run sends a streaming chat-completions request and returns timing and
 // token-throughput metrics.
 func Run(ctx context.Context, cfg Config) (Result, error) {
@@ -165,6 +183,11 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		body, err := json.Marshal(reqBody)
 		if err != nil {
 			return nil, time.Time{}, err
+		}
+		if len(cfg.ExtraBody) > 0 {
+			if body, err = overlayJSON(body, cfg.ExtraBody); err != nil {
+				return nil, time.Time{}, err
+			}
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint(cfg.URL), bytes.NewReader(body))
 		if err != nil {

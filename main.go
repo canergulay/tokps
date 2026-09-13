@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -83,6 +84,7 @@ type options struct {
 	detail, jsonOut, showVersion bool
 	costIn, costOut              float64
 	charsPerToken                float64
+	extraBody                    string
 }
 
 // parseFlags defines and parses the CLI flags. It returns the parsed options,
@@ -110,6 +112,7 @@ func parseFlags(args []string, stderr io.Writer) (*options, []string, int) {
 	fs.Float64Var(&opts.costIn, "cost-in", 0, "Input token price in USD per 1M tokens (adds a per-request cost line)")
 	fs.Float64Var(&opts.costOut, "cost-out", 0, "Output token price in USD per 1M tokens (adds a per-request cost line)")
 	fs.Float64Var(&opts.charsPerToken, "chars-per-token", 4, "Chars-per-token ratio for the estimated fallback (CJK ~ 1.5-2)")
+	fs.StringVar(&opts.extraBody, "extra-body", "", "JSON object merged into the request body, e.g. '{\"temperature\":0}' (your keys win)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -176,6 +179,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	var extra map[string]any
+	if opts.extraBody != "" {
+		if err := json.Unmarshal([]byte(opts.extraBody), &extra); err != nil || extra == nil {
+			fmt.Fprintf(stderr, "error: --extra-body must be a JSON object, got %q\n", opts.extraBody)
+			return 2
+		}
+	}
+
 	key := opts.apiKey
 	if key == "" {
 		key = os.Getenv("API_KEY")
@@ -195,6 +206,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		CostIn:         opts.costIn,
 		CostOut:        opts.costOut,
 		CharsPerToken:  opts.charsPerToken,
+		ExtraBody:      extra,
 		Warnf: func(format string, args ...any) {
 			fmt.Fprintf(stderr, "warning: "+format+"\n", args...)
 		},

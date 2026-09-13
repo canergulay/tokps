@@ -356,3 +356,56 @@ func TestRunReturnsHTTPErrorWithStatus(t *testing.T) {
 		t.Errorf("Error() = %q, want the existing 'endpoint returned <status>' wording", err.Error())
 	}
 }
+
+func TestRunExtraBodyOverlaysRequest(t *testing.T) {
+	var got map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{}}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer ts.Close()
+
+	cfg := testConfig(ts.URL)
+	cfg.ExtraBody = map[string]any{"temperature": 0.0, "thinking": map[string]any{"type": "disabled"}}
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if got["temperature"] != 0.0 {
+		t.Errorf("temperature = %v, want 0", got["temperature"])
+	}
+	if th, ok := got["thinking"].(map[string]any); !ok || th["type"] != "disabled" {
+		t.Errorf("thinking = %v, want {type: disabled}", got["thinking"])
+	}
+	if got["stream"] != true {
+		t.Errorf("stream = %v, want true (not overridden)", got["stream"])
+	}
+	if got["model"] != "test-model" {
+		t.Errorf("model = %v, want test-model", got["model"])
+	}
+}
+
+func TestRunExtraBodyUserKeysWin(t *testing.T) {
+	var got map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"hi"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer ts.Close()
+
+	cfg := testConfig(ts.URL)
+	cfg.ExtraBody = map[string]any{"stream": false}
+	res, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if got["stream"] != false {
+		t.Errorf("stream = %v, want false (user override wins)", got["stream"])
+	}
+	if res.Streamed {
+		t.Error("Streamed = true, want false via the non-streaming fallback")
+	}
+}

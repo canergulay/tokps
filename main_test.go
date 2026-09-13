@@ -129,3 +129,16 @@ func TestSweepValueParsesAndDisables(t *testing.T) {
 		t.Errorf("String() = %q, want \"\" when disabled", sv.String())
 	}
 }
+
+func TestRunRejectsNonObjectExtraBody(t *testing.T) {
+	for _, bad := range []string{`[1,2]`, `not json`, `null`, `5`} {
+		var out, errb bytes.Buffer
+		code := run([]string{"--url=http://x", "--model=m", "--extra-body=" + bad}, &out, &errb)
+		if code != 2 {
+			t.Errorf("--extra-body=%s: exit = %d, want 2", bad, code)
+		}
+		if !strings.Contains(errb.String(), "--extra-body") {
+			t.Errorf("--extra-body=%s: stderr = %q, want it to mention --extra-body", bad, errb.String())
+		}
+	}
+}
