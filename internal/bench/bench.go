@@ -45,6 +45,10 @@ type Config struct {
 	// could not be parsed). Nil silences them.
 	Warnf func(format string, args ...any)
 
+	// Progress, when set, is called after every warmup and measured batch
+	// with a ProgressEvent. Nil disables progress reporting.
+	Progress func(ProgressEvent)
+
 	// MaxTokensField names the request field carrying the output cap:
 	// "max_tokens" (default, OpenAI-compatible) or "max_completion_tokens"
 	// (newer OpenAI models / some providers). When empty it defaults to

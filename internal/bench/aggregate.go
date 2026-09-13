@@ -62,6 +62,7 @@ func RunN(ctx context.Context, cfg Config, runs, warmup, concurrency int) (Summa
 			}
 			return Summary{}, fmt.Errorf("warmup batch %d: %w", i+1, err)
 		}
+		cfg.progress(ProgressEvent{Phase: "warmup", Index: i + 1, Total: warmup, Concurrency: concurrency})
 	}
 	sum := Summary{
 		Model:       cfg.Model,
@@ -81,6 +82,7 @@ func RunN(ctx context.Context, cfg Config, runs, warmup, concurrency int) (Summa
 		}
 		sum.Results = append(sum.Results, results...)
 		sum.BatchTPS = append(sum.BatchTPS, aggTPS)
+		cfg.progress(ProgressEvent{Phase: "run", Index: i + 1, Total: runs, Concurrency: concurrency, BatchTPS: aggTPS})
 	}
 	return sum, nil
 }

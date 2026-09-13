@@ -225,3 +225,51 @@ func TestRunNDiscardsWarmupKeepsMeasuredRuns(t *testing.T) {
 		t.Errorf("Model = %q, want test-model", sum.Model)
 	}
 }
+
+func TestRunNEmitsProgressPerBatch(t *testing.T) {
+	ts := sseServer(t, []string{
+		`{"choices":[{"delta":{"content":"hi"}}]}`,
+		`{"choices":[{"delta":{}}],"usage":{"prompt_tokens":3,"completion_tokens":5}}`,
+	})
+	defer ts.Close()
+
+	cfg := testConfig(ts.URL)
+	var events []ProgressEvent
+	cfg.Progress = func(ev ProgressEvent) { events = append(events, ev) }
+
+	if _, err := RunN(context.Background(), cfg, 2, 1, 1); err != nil {
+		t.Fatalf("RunN error: %v", err)
+	}
+	want := []struct {
+		phase        string
+		index, total int
+	}{{"warmup", 1, 1}, {"run", 1, 2}, {"run", 2, 2}}
+	if len(events) != len(want) {
+		t.Fatalf("events = %+v, want %d events", events, len(want))
+	}
+	for i, w := range want {
+		ev := events[i]
+		if ev.Phase != w.phase || ev.Index != w.index || ev.Total != w.total || ev.Concurrency != 1 || ev.Label != "" {
+			t.Errorf("events[%d] = %+v, want phase=%s %d/%d concurrency=1 label=\"\"", i, ev, w.phase, w.index, w.total)
+		}
+	}
+	if events[0].BatchTPS != 0 {
+		t.Errorf("warmup BatchTPS = %v, want 0", events[0].BatchTPS)
+	}
+	if events[1].BatchTPS <= 0 {
+		t.Errorf("run BatchTPS = %v, want > 0", events[1].BatchTPS)
+	}
+}
+
+func TestWithLabelStampsEvents(t *testing.T) {
+	var got ProgressEvent
+	cfg := withLabel(Config{Progress: func(ev ProgressEvent) { got = ev }}, "c=4")
+	cfg.progress(ProgressEvent{Phase: "run", Index: 1, Total: 1})
+	if got.Label != "c=4" || got.Phase != "run" {
+		t.Errorf("forwarded event = %+v, want Label=c=4 Phase=run", got)
+	}
+	// withLabel on a Config without Progress stays a no-op.
+	if withLabel(Config{}, "x").Progress != nil {
+		t.Error("withLabel should not install a callback when none is configured")
+	}
+}
