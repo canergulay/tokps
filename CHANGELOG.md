@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-13
+
 ### Changed
 - Generation TPS now uses the standard `(output_tokens - 1) / generation_time`
   definition. The first token is produced during TTFT, so the generation window
@@ -81,5 +83,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallback.
 - `--version` flag.
 
-[Unreleased]: https://github.com/canergulay/tokps/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/canergulay/tokps/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/canergulay/tokps/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/canergulay/tokps/releases/tag/v0.1.0
