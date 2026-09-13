@@ -3,6 +3,7 @@ package bench
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -331,5 +332,27 @@ func TestRunComputesCost(t *testing.T) {
 	// 1000/1e6*6 + 2000/1e6*12 = 0.006 + 0.024 = 0.03
 	if diff := math.Abs(res.Cost - 0.03); diff > 1e-9 {
 		t.Errorf("Cost = %v, want ~0.03", res.Cost)
+	}
+}
+
+func TestRunReturnsHTTPErrorWithStatus(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"slow down"}`, http.StatusTooManyRequests)
+	}))
+	defer ts.Close()
+
+	_, err := Run(context.Background(), testConfig(ts.URL))
+	var he *HTTPError
+	if !errors.As(err, &he) {
+		t.Fatalf("error = %T (%v), want *HTTPError", err, err)
+	}
+	if he.Status != 429 {
+		t.Errorf("Status = %d, want 429", he.Status)
+	}
+	if !strings.Contains(he.Body, "slow down") {
+		t.Errorf("Body = %q, want the response body", he.Body)
+	}
+	if !strings.Contains(err.Error(), "endpoint returned 429") {
+		t.Errorf("Error() = %q, want the existing 'endpoint returned <status>' wording", err.Error())
 	}
 }

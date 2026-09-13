@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -183,7 +184,11 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 			resp.Body.Close()
-			return nil, time.Time{}, fmt.Errorf("endpoint returned %s: %s", resp.Status, strings.TrimSpace(string(b)))
+			return nil, time.Time{}, &HTTPError{
+				Status:     resp.StatusCode,
+				StatusText: resp.Status,
+				Body:       strings.TrimSpace(string(b)),
+			}
 		}
 		return resp, tSend, nil
 	}
@@ -197,7 +202,8 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		// Newer OpenAI models reject max_tokens and ask for
 		// max_completion_tokens. Retry once with the other field when the
 		// endpoint says so.
-		if field != "max_completion_tokens" && strings.Contains(err.Error(), "max_completion_tokens") {
+		var he *HTTPError
+		if field != "max_completion_tokens" && errors.As(err, &he) && strings.Contains(he.Body, "max_completion_tokens") {
 			resp, tSend, err = send("max_completion_tokens")
 		}
 		if err != nil {

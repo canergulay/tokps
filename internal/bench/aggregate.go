@@ -85,17 +85,6 @@ func RunN(ctx context.Context, cfg Config, runs, warmup, concurrency int) (Summa
 	return sum, nil
 }
 
-// InterruptedError reports that a benchmark was cut short (e.g. by SIGINT)
-// after some measured batches completed. Completed counts the timed batches
-// that finished before cancellation.
-type InterruptedError struct {
-	Completed int
-}
-
-func (e *InterruptedError) Error() string {
-	return fmt.Sprintf("interrupted after %d measured batch(es)", e.Completed)
-}
-
 // ParseLevels parses a comma-separated list of concurrency levels (e.g.
 // "1,2,4,8") into a slice of positive ints, for the sweep mode.
 func ParseLevels(s string) ([]int, error) {
