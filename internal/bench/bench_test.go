@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -86,14 +87,16 @@ func TestRunStreamingEstimatesFromCharsWhenNoUsage(t *testing.T) {
 }
 
 // fakeClock returns a now() function that advances by step on every call,
-// starting at the Unix epoch. Deterministic timing for tests.
+// starting at the Unix epoch. Deterministic timing for tests, and safe to
+// share across the goroutines of a concurrent batch. Real clocks can report a
+// zero-length wall for a sub-millisecond localhost exchange on platforms with
+// coarse timer resolution (Windows), so tests that assert on throughput must
+// not depend on them.
 func fakeClock(step time.Duration) func() time.Time {
 	base := time.Unix(0, 0)
-	var n int64
+	var n atomic.Int64
 	return func() time.Time {
-		t := base.Add(time.Duration(n) * step)
-		n++
-		return t
+		return base.Add(time.Duration(n.Add(1)-1) * step)
 	}
 }
 

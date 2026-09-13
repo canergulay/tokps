@@ -239,6 +239,7 @@ func TestRunNEmitsProgressPerBatch(t *testing.T) {
 	defer ts.Close()
 
 	cfg := testConfig(ts.URL)
+	cfg.Now = fakeClock(time.Second) // deterministic wall so BatchTPS > 0 on every platform
 	var events []ProgressEvent
 	cfg.Progress = func(ev ProgressEvent) { events = append(events, ev) }
 
@@ -391,7 +392,9 @@ func TestRunNConcurrentBatchAggregateExcludesFailedStreams(t *testing.T) {
 	ts, _ := scriptedServer(t, func(n int) bool { return n%2 == 0 })
 	defer ts.Close()
 
-	sum, err := RunN(context.Background(), testConfig(ts.URL), 1, 0, 4)
+	cfg := testConfig(ts.URL)
+	cfg.Now = fakeClock(time.Millisecond) // deterministic wall so the aggregate is > 0 on every platform
+	sum, err := RunN(context.Background(), cfg, 1, 0, 4)
 	if err != nil {
 		t.Fatalf("RunN error: %v", err)
 	}
