@@ -23,45 +23,13 @@
   <a href="#comparing-providers">Compare providers</a> ·
   <a href="#reasoning-models">Reasoning models</a> ·
   <a href="#ci-gates">CI gates</a> ·
+  <a href="#why-tokps">Why tokps</a> ·
   <a href="#how-it-measures">How it measures</a>
 </p>
 
 <p align="center">
   <img src="assets/demo.svg" alt="tokps comparing three DeepSeek models: TTFT, time to first answer, TPS and end-to-end throughput" width="100%">
 </p>
-
-## Why tokps
-
-Provider dashboards quote peak numbers; your users feel the p50. tokps
-measures what actually reaches your client — OpenAI, DeepSeek, Z.ai / GLM,
-Groq, OpenRouter, vLLM, llama.cpp, Ollama, a custom gateway, anything that
-speaks `/chat/completions`.
-
-| | |
-|---|---|
-| ⚡ **The two numbers that matter** | Time to first token and generation tok/s, using the standard *N − 1* definition from vLLM, genai-perf and llmperf. |
-| 📊 **Statistics, not anecdotes** | A discarded warmup, then 5 timed runs reported as p50 + min–max, so one cold start can't skew the result. |
-| 🧠 **Reasoning-aware** | Splits thinking from answer tokens and reports *time to first answer*, the wait your users actually feel. Hidden reasoning (o-series, gpt-5) can't inflate TPS. |
-| 🏁 **Cross-provider races** | `--target model@url` repeated: same prompt, interleaved runs, one table. Picks up each provider's own key variable. |
-| 📈 **Load sweeps** | `--sweep=1,2,4,8,16` draws the throughput-vs-concurrency curve and finds where an endpoint saturates. |
-| 🚦 **CI gates** | `--min-tps`, `--max-ttft`, `--max-error-rate` exit with code 3 when a deploy gets slower. |
-| 🧾 **Pipes anywhere** | `--json` for machines, `--md` for PRs and issues, plain text for humans. |
-
-Here's a single run:
-
-```text
-tokps — glm-5.2 @ api.z.ai  (5 runs, 1 warmup)
-
-  prompt tokens     39
-  output tokens     200   (exact, median)
-
-  TTFT     p50 2.61s   range 2.41s–2.95s
-  TPS      p50 73.1   range 69.8–75.4   (generation, N-1)
-  e2e      p50 36.8   range 34.1–38.0   (incl. TTFT)
-```
-
-For a single cheap request, pass `--runs 1 --warmup 0` — the output falls back
-to a detailed single-shot block (per-run TTFT, generation, and total wall).
 
 ## Install
 
@@ -111,6 +79,22 @@ The base URL has `/chat/completions` appended automatically, so `…/v1` and
 `…/paas/v4` both work. If you pass a full `…/chat/completions` URL it's used
 as-is.
 
+Here's what a run prints:
+
+```text
+tokps — glm-5.2 @ api.z.ai  (5 runs, 1 warmup)
+
+  prompt tokens     39
+  output tokens     200   (exact, median)
+
+  TTFT     p50 2.61s   range 2.41s–2.95s
+  TPS      p50 73.1   range 69.8–75.4   (generation, N-1)
+  e2e      p50 36.8   range 34.1–38.0   (incl. TTFT)
+```
+
+For a single cheap request, pass `--runs 1 --warmup 0` — the output falls back
+to a detailed single-shot block (per-run TTFT, generation, and total wall).
+
 ### Flags
 
 | Flag | Default | Description |
@@ -148,6 +132,23 @@ as-is.
 > hang, and you'll know how far it got.
 
 Run `tokps` with no flags to see the full list.
+
+## Why tokps
+
+Provider dashboards quote peak numbers; your users feel the p50. tokps
+measures what actually reaches your client — OpenAI, DeepSeek, Z.ai / GLM,
+Groq, OpenRouter, vLLM, llama.cpp, Ollama, a custom gateway, anything that
+speaks `/chat/completions`.
+
+| | |
+|---|---|
+| ⚡ **The two numbers that matter** | Time to first token and generation tok/s, using the standard *N − 1* definition from vLLM, genai-perf and llmperf. |
+| 📊 **Statistics, not anecdotes** | A discarded warmup, then 5 timed runs reported as p50 + min–max, so one cold start can't skew the result. |
+| 🧠 **Reasoning-aware** | Splits thinking from answer tokens and reports *time to first answer*, the wait your users actually feel. Hidden reasoning (o-series, gpt-5) can't inflate TPS. |
+| 🏁 **Cross-provider races** | `--target model@url` repeated: same prompt, interleaved runs, one table. Picks up each provider's own key variable. |
+| 📈 **Load sweeps** | `--sweep=1,2,4,8,16` draws the throughput-vs-concurrency curve and finds where an endpoint saturates. |
+| 🚦 **CI gates** | `--min-tps`, `--max-ttft`, `--max-error-rate` exit with code 3 when a deploy gets slower. |
+| 🧾 **Pipes anywhere** | `--json` for machines, `--md` for PRs and issues, plain text for humans. |
 
 ## How it measures
 
