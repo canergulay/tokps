@@ -274,7 +274,9 @@ tokps — compare  (5 runs, 1 warmup)
 ```
 
 Each target uses its own key (see below); `#VAR` names it explicitly. A
-`--target` without `@url` uses `--url`. Pass the same model on two hosts to
+`--target` without `@url` uses `--url`. Model names that contain `@`
+themselves (Cloudflare's `@cf/meta/…`) work: the URL starts at the first `@`
+followed by something URL-shaped. Pass the same model on two hosts to
 compare providers serving one open-weights model.
 
 ### API keys
@@ -291,7 +293,8 @@ For each endpoint tokps uses the first key it finds:
    `MOONSHOT_API_KEY`, `ZAI_API_KEY` (api.z.ai), `ZHIPUAI_API_KEY`
    (open.bigmodel.cn), `DASHSCOPE_API_KEY`
 4. `API_KEY`
-5. `OPENAI_API_KEY`
+5. `OPENAI_API_KEY` — only for OpenAI itself and unknown hosts (local servers,
+   gateways), so an OpenAI key is never sent to another known provider
 
 ### Failures under load
 

@@ -144,7 +144,7 @@ func thinkingNote(exact, hidden, median bool, answer int) string {
 // writeAnswerLine adds time-to-first-answer for reasoning models that
 // stream their thinking: TTFT then only marks the first thinking token.
 func writeAnswerLine(w io.Writer, s bench.Summary) {
-	if !s.Reasoning() || s.HiddenReasoning() {
+	if !streamsThinking(s) {
 		return
 	}
 	a, reached := s.TTFA()

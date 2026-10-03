@@ -96,6 +96,13 @@ func RunCompare(ctx context.Context, cfg Config, targets []Target, runs, warmup,
 			if err := rs[i].measure(ctx); err != nil {
 				return nil, fmt.Errorf("%s: %w", labels[i], err)
 			}
+			// Without warmup, the canary's first batch is the fail-fast
+			// check: stop before paying for every other target.
+			if round == 0 && i == 0 {
+				if _, err := rs[0].result(); err != nil {
+					return nil, fmt.Errorf("%s: %w", labels[0], err)
+				}
+			}
 		}
 	}
 	sums := make([]Summary, len(rs))

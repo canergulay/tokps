@@ -127,3 +127,18 @@ func TestFormatCompareMixedHostsAndAnswerColumn(t *testing.T) {
 		t.Errorf("mixed-host header should not name one host:\n%s", out)
 	}
 }
+
+func TestFormatCompareNonStreamedReasoningHasNoAnswerColumn(t *testing.T) {
+	r := okResult(0, 0, 2*time.Second)
+	r.Streamed, r.Reasoning, r.ReasoningExact, r.ReasoningTokens = false, true, true, 80
+	sums := []bench.Summary{
+		{Model: "a", Host: "h", BatchTPS: []float64{1}, Results: []bench.Result{r}},
+		{Model: "b", Host: "h", BatchTPS: []float64{1}, Results: []bench.Result{okResult(time.Second, time.Second, 2*time.Second)}},
+	}
+	var buf bytes.Buffer
+	FormatCompare(&buf, sums)
+	FormatCompareMarkdown(&buf, sums)
+	if out := buf.String(); strings.Contains(out, "not reached") || strings.Contains(out, "answer p50") {
+		t.Errorf("a non-streamed reasoning model cannot have an answer time:\n%s", out)
+	}
+}

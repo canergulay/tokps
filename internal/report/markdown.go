@@ -32,7 +32,7 @@ func FormatMarkdown(w io.Writer, s bench.Summary, detail bool) {
 	if s.Streamed() {
 		t := s.TTFT()
 		fmt.Fprintf(w, "| TTFT | %s | %s | %s |\n", secs(t.P50), secs(t.Min), secs(t.Max))
-		if s.Reasoning() && !s.HiddenReasoning() {
+		if streamsThinking(s) {
 			if a, reached := s.TTFA(); reached > 0 {
 				fmt.Fprintf(w, "| first answer | %s | %s | %s |\n", secs(a.P50), secs(a.Min), secs(a.Max))
 			} else {

@@ -250,6 +250,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		cfg.Warnf = func(format string, args ...any) {
 			fmt.Fprintf(stderr, "warning: "+format+"\n", args...)
 		}
+		for _, w := range missingKeyWarnings(targets) {
+			cfg.Warnf("%s", w)
+		}
 		if isTerminal(stderr) {
 			cfg.Progress = func(ev bench.ProgressEvent) { fmt.Fprintln(stderr, progressLine(ev)) }
 		}

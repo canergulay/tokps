@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -50,7 +51,9 @@ func providerEnv(rawURL string) string {
 // resolveKey picks the API key for one endpoint. Precedence: an explicit
 // per-target variable (model@url#VAR) > --api-key > the provider's own
 // variable for the URL's host (e.g. DEEPSEEK_API_KEY) > API_KEY >
-// OPENAI_API_KEY.
+// OPENAI_API_KEY. The OPENAI_API_KEY fallback is skipped for other known
+// providers, so an OpenAI key is never sent to, say, DeepSeek; unknown hosts
+// (local servers, gateways) keep it, per the OpenAI-compatible convention.
 func resolveKey(explicitEnv, flagKey, rawURL string, getenv func(string) string) (string, error) {
 	if explicitEnv != "" {
 		if k := getenv(explicitEnv); k != "" {
@@ -61,7 +64,12 @@ func resolveKey(explicitEnv, flagKey, rawURL string, getenv func(string) string)
 	if flagKey != "" {
 		return flagKey, nil
 	}
-	for _, name := range []string{providerEnv(rawURL), "API_KEY", "OPENAI_API_KEY"} {
+	own := providerEnv(rawURL)
+	names := []string{own, "API_KEY"}
+	if own == "" || own == "OPENAI_API_KEY" {
+		names = append(names, "OPENAI_API_KEY")
+	}
+	for _, name := range names {
 		if name == "" {
 			continue
 		}
@@ -77,8 +85,10 @@ type targetSpec struct {
 	model, url, keyEnv string
 }
 
-// parseTarget parses "model[@url][#ENV_VAR]". The model ends at the first
-// '@'; '#' (a URL fragment, meaningless to an API) names the key variable.
+// parseTarget parses "model[@url][#ENV_VAR]". The URL starts at the first
+// '@' followed by something URL-shaped, so model names that contain '@'
+// themselves (Cloudflare's "@cf/meta/…") survive; '#' (a URL fragment,
+// meaningless to an API) names the key variable.
 func parseTarget(v string) (targetSpec, error) {
 	var t targetSpec
 	if i := strings.LastIndex(v, "#"); i >= 0 {
@@ -87,12 +97,52 @@ func parseTarget(v string) (targetSpec, error) {
 			return t, fmt.Errorf("empty key variable after '#'")
 		}
 	}
-	t.model, t.url, _ = strings.Cut(v, "@")
+	t.model = v
+	for i := 0; i < len(v); i++ {
+		if v[i] == '@' && looksLikeURL(v[i+1:]) {
+			t.model, t.url = v[:i], v[i+1:]
+			break
+		}
+	}
 	t.model, t.url = strings.TrimSpace(t.model), strings.TrimSpace(t.url)
 	if t.model == "" {
 		return t, fmt.Errorf("missing model name in %q", v)
 	}
 	return t, nil
+}
+
+// looksLikeURL reports whether s starts like an endpoint: a scheme, or a
+// host that is localhost, carries a port, or ends in an alphabetic TLD.
+func looksLikeURL(s string) bool {
+	if scheme, _, ok := strings.Cut(s, "://"); ok && isScheme(scheme) {
+		return true
+	}
+	host, _, _ := strings.Cut(s, "/")
+	if host == "localhost" || strings.Contains(host, ":") {
+		return true
+	}
+	dot := strings.LastIndex(host, ".")
+	if dot < 0 || dot == len(host)-1 {
+		return false
+	}
+	for _, r := range host[dot+1:] {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
+// isScheme reports whether s is a URL scheme: a letter followed by letters,
+// digits, '+', '-' or '.'.
+func isScheme(s string) bool {
+	for i, r := range s {
+		letter := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		if !letter && (i == 0 || !strings.ContainsRune("0123456789+-.", r)) {
+			return false
+		}
+	}
+	return s != ""
 }
 
 // targetsValue collects repeated --target flags.
@@ -137,7 +187,7 @@ func (r *rateValue) Set(s string) error {
 		return fmt.Errorf("want a fraction like 0.05 or a percentage like 5%%")
 	}
 	f /= div
-	if f < 0 || f > 1 {
+	if math.IsNaN(f) || f < 0 || f > 1 {
 		return fmt.Errorf("must be between 0 and 1 (or 0%% and 100%%)")
 	}
 	r.v = &f
@@ -179,4 +229,16 @@ func buildTargets(opts *options, getenv func(string) string) ([]bench.Target, er
 		targets[i] = bench.Target{Model: s.model, URL: u, APIKey: key}
 	}
 	return targets, nil
+}
+
+// missingKeyWarnings names the variable to set for each known-provider target
+// that resolved no key — such a run would only collect 401s.
+func missingKeyWarnings(targets []bench.Target) []string {
+	var out []string
+	for _, t := range targets {
+		if env := providerEnv(t.URL); t.APIKey == "" && env != "" {
+			out = append(out, fmt.Sprintf("no API key for %s (model %s) — set %s or API_KEY", t.URL, t.Model, env))
+		}
+	}
+	return out
 }

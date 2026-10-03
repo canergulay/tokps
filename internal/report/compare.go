@@ -63,17 +63,23 @@ func modelWidth(sums []bench.Summary, mixed bool) int {
 // the table needs a time-to-first-answer column.
 func anyReasoning(sums []bench.Summary) bool {
 	for _, s := range sums {
-		if s.Reasoning() && !s.HiddenReasoning() {
+		if streamsThinking(s) {
 			return true
 		}
 	}
 	return false
 }
 
+// streamsThinking reports whether s streamed visible thinking, the only case
+// where a separate time-to-first-answer exists.
+func streamsThinking(s bench.Summary) bool {
+	return s.Streamed() && s.Reasoning() && !s.HiddenReasoning()
+}
+
 // answerCell renders the time-to-first-answer median, "–" for a model that
 // does not think out loud, or "not reached".
 func answerCell(s bench.Summary) string {
-	if !s.Reasoning() || s.HiddenReasoning() {
+	if !streamsThinking(s) {
 		return "–"
 	}
 	a, reached := s.TTFA()

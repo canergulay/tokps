@@ -158,3 +158,48 @@ func TestRunStreamingReadsReasoningField(t *testing.T) {
 		t.Errorf("hidden=%v thinking=%d TTFT=%v TTFA=%v, want streamed thinking 12, 1s, 2s", res.HiddenReasoning, res.ReasoningTokens, res.TTFT, res.TTFA)
 	}
 }
+
+// xAI reports reasoning on top of completion_tokens (total = prompt +
+// completion + reasoning) rather than inside it.
+func TestRunStreamingReasoningOutsideCompletionTokens(t *testing.T) {
+	ts := sseServer(t, []string{
+		`{"choices":[{"delta":{"content":"a"}}]}`,
+		`{"choices":[{"delta":{"content":"b"}}]}`,
+		`{"choices":[{"delta":{"content":"c"}}]}`,
+		`{"choices":[{"delta":{}}],"usage":{"prompt_tokens":9,"completion_tokens":40,"total_tokens":89,"completion_tokens_details":{"reasoning_tokens":40}}}`,
+	})
+	defer ts.Close()
+
+	cfg := testConfig(ts.URL)
+	cfg.Now = fakeClock(time.Second)
+
+	res, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if res.OutputTokens != 80 || res.ReasoningTokens != 40 || res.AnswerTokens() != 40 || !res.HiddenReasoning {
+		t.Errorf("output=%d thinking=%d answer=%d hidden=%v, want 80/40/40/true", res.OutputTokens, res.ReasoningTokens, res.AnswerTokens(), res.HiddenReasoning)
+	}
+	// The 40 visible tokens over the 2s window: (40-1)/2.
+	if got := res.TPS(); math.Abs(got-19.5) > 1e-9 {
+		t.Errorf("TPS = %v, want 19.5", got)
+	}
+}
+
+// Servers migrating from reasoning_content to reasoning may send both.
+func TestRunStreamingCountsDuplicatedReasoningOnce(t *testing.T) {
+	ts := sseServer(t, []string{
+		`{"choices":[{"delta":{"reasoning_content":"aaaaaaaaaa","reasoning":"aaaaaaaaaa"}}]}`,
+		`{"choices":[{"delta":{"content":"bbbbbbbbbb"}}]}`,
+		`{"choices":[{"delta":{}}],"usage":{"prompt_tokens":9,"completion_tokens":100}}`,
+	})
+	defer ts.Close()
+
+	res, err := Run(context.Background(), testConfig(ts.URL))
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if res.ReasoningTokens != 50 {
+		t.Errorf("thinking = %d, want 50 (10 of 20 runes, counted once)", res.ReasoningTokens)
+	}
+}

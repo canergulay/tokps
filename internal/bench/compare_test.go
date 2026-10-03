@@ -176,3 +176,16 @@ func TestRunCompareLaterTargetWarmupFailureIsRow(t *testing.T) {
 		t.Errorf("request order = %s, want fast,missing,fast,fast", got)
 	}
 }
+
+func TestRunCompareCanaryFailsFastWithoutWarmup(t *testing.T) {
+	ts, seen := modelServer(t)
+	defer ts.Close()
+
+	_, err := RunCompare(context.Background(), testConfig(ts.URL), ModelTargets([]string{"missing", "fast", "slow"}), 3, 0, 1)
+	if err == nil || !strings.Contains(err.Error(), "404") {
+		t.Fatalf("error = %v, want the canary's 404", err)
+	}
+	if got := strings.Join(seen(), ","); got != "missing" {
+		t.Errorf("requests = %s, want only the canary's first batch", got)
+	}
+}

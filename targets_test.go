@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/canergulay/tokps/internal/bench"
 )
 
 func envMap(m map[string]string) func(string) string {
@@ -24,6 +26,10 @@ func TestParseTarget(t *testing.T) {
 		{"deepseek-chat@https://api.deepseek.com", "deepseek-chat", "https://api.deepseek.com", ""},
 		{"llama@http://localhost:8000/v1#LOCAL_KEY", "llama", "http://localhost:8000/v1", "LOCAL_KEY"},
 		{"m#K", "m", "", "K"},
+		{"@cf/meta/llama-3.1-8b-instruct@https://api.cloudflare.com/client/v4/accounts/x/ai/v1", "@cf/meta/llama-3.1-8b-instruct", "https://api.cloudflare.com/client/v4/accounts/x/ai/v1", ""},
+		{"qwen@2.5", "qwen@2.5", "", ""},
+		{"m@localhost:8000/v1", "m", "localhost:8000/v1", ""},
+		{"m@api.deepseek.com", "m", "api.deepseek.com", ""},
 	}
 	for _, c := range cases {
 		got, err := parseTarget(c.in)
@@ -62,8 +68,13 @@ func TestResolveKeyPrecedence(t *testing.T) {
 			t.Errorf("resolveKey(%q,%q,%q) = %q,%v want %q", c.explicit, c.flag, c.url, got, err, c.want)
 		}
 	}
-	if got, _ := resolveKey("", "", "http://x", envMap(map[string]string{"OPENAI_API_KEY": "oai"})); got != "oai" {
-		t.Errorf("last resort = %q, want OPENAI_API_KEY", got)
+	onlyOpenAI := envMap(map[string]string{"OPENAI_API_KEY": "oai"})
+	if got, _ := resolveKey("", "", "http://x", onlyOpenAI); got != "oai" {
+		t.Errorf("last resort for an unknown host = %q, want OPENAI_API_KEY", got)
+	}
+	// An OpenAI key must never be sent to another known provider.
+	if got, _ := resolveKey("", "", "https://api.deepseek.com", onlyOpenAI); got != "" {
+		t.Errorf("DeepSeek host got key %q, want none (OPENAI_API_KEY is OpenAI's)", got)
 	}
 	if _, err := resolveKey("NOPE", "", "http://x", env); err == nil || !strings.Contains(err.Error(), "$NOPE") {
 		t.Errorf("unset explicit variable: err = %v, want it named", err)
@@ -77,7 +88,7 @@ func TestRateValue(t *testing.T) {
 			t.Errorf("Set(%q) = %v,%v want %v", in, r.v, err, want)
 		}
 	}
-	for _, bad := range []string{"x", "-0.1", "1.5", "150%"} {
+	for _, bad := range []string{"x", "-0.1", "1.5", "150%", "NaN", "nan%", "Inf"} {
 		var r rateValue
 		if err := r.Set(bad); err == nil {
 			t.Errorf("Set(%q): expected an error", bad)
@@ -170,5 +181,17 @@ func TestRunRejectsBadMaxErrorRate(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"--url=http://x", "--model=m", "--max-error-rate=2"}, &out, &errb); code != 2 {
 		t.Errorf("exit = %d, want 2", code)
+	}
+}
+
+func TestMissingKeyWarnings(t *testing.T) {
+	got := missingKeyWarnings([]bench.Target{
+		{Model: "deepseek-chat", URL: "https://api.deepseek.com"},
+		{Model: "gpt-4o-mini", URL: "https://api.openai.com/v1", APIKey: "k"},
+		{Model: "local", URL: "http://localhost:8000/v1"},
+	})
+	want := "no API key for https://api.deepseek.com (model deepseek-chat) — set DEEPSEEK_API_KEY or API_KEY"
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("warnings = %q, want only [%s]", got, want)
 	}
 }

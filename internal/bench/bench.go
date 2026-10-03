@@ -2,6 +2,7 @@ package bench
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -92,18 +93,30 @@ type chatRequest struct {
 type usage struct {
 	PromptTokens            int `json:"prompt_tokens"`
 	CompletionTokens        int `json:"completion_tokens"`
+	TotalTokens             int `json:"total_tokens"`
 	CompletionTokensDetails *struct {
 		ReasoningTokens int `json:"reasoning_tokens"`
 	} `json:"completion_tokens_details"`
 }
 
-// reasoningTokens returns the thinking-token count the server reported inside
-// completion_tokens, and whether it reported one at all.
+// reasoningTokens returns the thinking-token count the server reported, and
+// whether it reported one at all.
 func (u *usage) reasoningTokens() (int, bool) {
 	if u == nil || u.CompletionTokensDetails == nil {
 		return 0, false
 	}
 	return u.CompletionTokensDetails.ReasoningTokens, true
+}
+
+// outputTokens returns every generated token. OpenAI and most providers count
+// reasoning inside completion_tokens; xAI reports it on top (total = prompt +
+// completion + reasoning), so it is added back there.
+func (u *usage) outputTokens() int {
+	n, _ := u.reasoningTokens()
+	if n > 0 && (n > u.CompletionTokens || (u.TotalTokens > 0 && u.TotalTokens == u.PromptTokens+u.CompletionTokens+n)) {
+		return u.CompletionTokens + n
+	}
+	return u.CompletionTokens
 }
 
 type streamChunk struct {
@@ -153,6 +166,9 @@ func poolingClient(concurrency int) *http.Client {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.MaxIdleConns = 0 // no global cap; bound per-host instead
 	t.MaxIdleConnsPerHost = concurrency
+	// An interleaved compare leaves each target's warmed connections idle
+	// while the other targets run; keep them longer than the default 90s.
+	t.IdleConnTimeout = 5 * time.Minute
 	return &http.Client{Transport: t}
 }
 
@@ -297,7 +313,9 @@ func runStreaming(resp *http.Response, cfg Config, host string, tSend time.Time,
 		if len(chunk.Choices) > 0 {
 			delta := chunk.Choices[0].Delta
 			answer = utf8.RuneCountInString(delta.Content)
-			thinking = utf8.RuneCountInString(string(delta.ReasoningContent)) + utf8.RuneCountInString(string(delta.Reasoning))
+			// Servers migrating between the two names may send both with the
+			// same text; count it once.
+			thinking = utf8.RuneCountInString(string(cmp.Or(delta.ReasoningContent, delta.Reasoning)))
 		}
 		if answer+thinking > 0 {
 			t := now()
@@ -321,7 +339,7 @@ func runStreaming(resp *http.Response, cfg Config, host string, tSend time.Time,
 
 	if u != nil {
 		res.PromptTokens = u.PromptTokens
-		res.OutputTokens = u.CompletionTokens
+		res.OutputTokens = u.outputTokens()
 		res.TokensExact = true
 	} else {
 		res.OutputTokens = estimateTokens(textRunes, cfg.CharsPerToken)
@@ -379,7 +397,7 @@ func runNonStreaming(resp *http.Response, cfg Config, host string, tSend time.Ti
 	}
 	if cr.Usage != nil {
 		res.PromptTokens = cr.Usage.PromptTokens
-		res.OutputTokens = cr.Usage.CompletionTokens
+		res.OutputTokens = cr.Usage.outputTokens()
 		res.TokensExact = true
 		if n, ok := cr.Usage.reasoningTokens(); ok && n > 0 {
 			res.ReasoningTokens = min(n, res.OutputTokens)
