@@ -1,24 +1,53 @@
 <p align="center">
-  <img src="assets/logo.png" alt="tokps logo" width="128" height="128">
+  <img src="assets/banner.svg" alt="tokps — how fast is your LLM, really?" width="100%">
 </p>
 
-<h1 align="center">tokps</h1>
-
 <p align="center">
+  <a href="https://github.com/canergulay/tokps/releases"><img src="https://img.shields.io/github/v/release/canergulay/tokps?color=22a35a&label=release" alt="Latest release"></a>
   <a href="https://pkg.go.dev/github.com/canergulay/tokps"><img src="https://pkg.go.dev/badge/github.com/canergulay/tokps.svg" alt="Go Reference"></a>
   <a href="https://go.dev/"><img src="https://img.shields.io/badge/go-1.23%2B-00ADD8?logo=go" alt="Go Version"></a>
+  <a href="go.mod"><img src="https://img.shields.io/badge/dependencies-0-22a35a" alt="Zero dependencies"></a>
+  <a href="https://github.com/canergulay/tokps/pkgs/container/tokps"><img src="https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white" alt="Docker image"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
 </p>
 
-A tiny CLI that measures the **token-generation throughput (TPS)** of any
-OpenAI-compatible `/chat/completions` endpoint — OpenAI, Z.ai / GLM, local
-models, custom gateways, anything that speaks the same wire format.
+<p align="center">
+  <b>Time-to-first-token and tokens/sec for any OpenAI-compatible endpoint.</b><br>
+  Benchmark one model, sweep it under load, race providers against each other, gate your CI.<br>
+  One static binary · zero dependencies · honest statistics.
+</p>
 
-It sends a test prompt with streaming on, watches the tokens stream back, and
-prints how fast the model generated them. By default it runs one discarded
-warmup followed by five timed requests and reports the **median (p50) plus the
-observed min–max range**, so a single cold start or network hiccup doesn't skew
-the result.
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#usage">Usage</a> ·
+  <a href="#comparing-providers">Compare providers</a> ·
+  <a href="#reasoning-models">Reasoning models</a> ·
+  <a href="#ci-gates">CI gates</a> ·
+  <a href="#how-it-measures">How it measures</a>
+</p>
+
+<p align="center">
+  <img src="assets/demo.svg" alt="tokps comparing three DeepSeek models: TTFT, time to first answer, TPS and end-to-end throughput" width="100%">
+</p>
+
+## Why tokps
+
+Provider dashboards quote peak numbers; your users feel the p50. tokps
+measures what actually reaches your client — OpenAI, DeepSeek, Z.ai / GLM,
+Groq, OpenRouter, vLLM, llama.cpp, Ollama, a custom gateway, anything that
+speaks `/chat/completions`.
+
+| | |
+|---|---|
+| ⚡ **The two numbers that matter** | Time to first token and generation tok/s, using the standard *N − 1* definition from vLLM, genai-perf and llmperf. |
+| 📊 **Statistics, not anecdotes** | A discarded warmup, then 5 timed runs reported as p50 + min–max, so one cold start can't skew the result. |
+| 🧠 **Reasoning-aware** | Splits thinking from answer tokens and reports *time to first answer*, the wait your users actually feel. Hidden reasoning (o-series, gpt-5) can't inflate TPS. |
+| 🏁 **Cross-provider races** | `--target model@url` repeated: same prompt, interleaved runs, one table. Picks up each provider's own key variable. |
+| 📈 **Load sweeps** | `--sweep=1,2,4,8,16` draws the throughput-vs-concurrency curve and finds where an endpoint saturates. |
+| 🚦 **CI gates** | `--min-tps`, `--max-ttft`, `--max-error-rate` exit with code 3 when a deploy gets slower. |
+| 🧾 **Pipes anywhere** | `--json` for machines, `--md` for PRs and issues, plain text for humans. |
+
+Here's a single run:
 
 ```text
 tokps — glm-5.2 @ api.z.ai  (5 runs, 1 warmup)
@@ -60,14 +89,16 @@ go build -o tokps .
 
 ## Usage
 
-Set your key once (`API_KEY` is provider-agnostic — it applies to whatever
-`--url` you point at), then run:
+tokps picks up the key variable your provider's SDK already uses —
+`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `GROQ_API_KEY`, … (see
+[API keys](#api-keys)) — or the provider-agnostic `API_KEY`:
 
 ```sh
-export API_KEY=sk-...
-
 # OpenAI
 tokps --url https://api.openai.com/v1 --model gpt-4o-mini
+
+# DeepSeek
+tokps --url https://api.deepseek.com --model deepseek-chat
 
 # Z.ai / GLM
 tokps --url https://api.z.ai/api/paas/v4 --model glm-5.2
@@ -84,9 +115,10 @@ as-is.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--url` | *(required)* | Base URL of the endpoint. |
-| `--model` | *(required)* | Model name. A comma-separated list (`--model a,b,c`) benchmarks each in turn and prints a comparison table. |
-| `--api-key` | `API_KEY` env, then `OPENAI_API_KEY` | Bearer token. Flag wins over env. |
+| `--url` | *(required)* | Base URL of the endpoint. Optional when every `--target` carries its own. |
+| `--model` | *(required)* | Model name. A comma-separated list (`--model a,b,c`) benchmarks each and prints a comparison table. |
+| `--target` | — | `model@url[#KEY_VAR]`, repeatable — compare models across providers. Replaces `--url`/`--model`. |
+| `--api-key` | see [API keys](#api-keys) | Bearer token. Flag wins over env. |
 | `--prompt` | built-in | Override the test prompt. |
 | `--max-tokens` | `512` | Upper bound on output length. |
 | `--max-tokens-field` | `max_tokens` | Field carrying the output cap: `max_tokens` or `max_completion_tokens` (newer OpenAI models). Auto-falls back when the endpoint rejects `max_tokens`. |
@@ -105,6 +137,7 @@ as-is.
 | `--quiet` | `false` | Suppress progress and warnings on stderr. |
 | `--min-tps` | `0` | CI gate: exit 3 if generation TPS p50 is below this. |
 | `--max-ttft` | `0` | CI gate: exit 3 if TTFT p50 exceeds this (e.g. `1.5s`). |
+| `--max-error-rate` | — | CI gate: exit 3 if more than this share of streams failed (`0.05` or `5%`; `0` = none allowed). |
 
 > Each invocation sends `--warmup` + `--runs` requests (6 by default), so it
 > makes that many billable calls against a metered endpoint. Use
@@ -172,14 +205,23 @@ load.
 (a bare `--sweep` uses the default `1,2,4,8` curve):
 
 ```text
-tokps — glm-5.2 @ api.z.ai  (sweep, 3 runs, 1 warmup)
+tokps — deepseek-chat @ api.deepseek.com  (sweep, 3 runs, 1 warmup)
 
-  concurrency   aggregate tok/s   TTFT p50   TPS p50/stream
-  1             73.1              0.42s      73.1
-  2             140.0             0.45s      70.0
-  4             250.0             0.61s      62.5
-  8             300.0             1.10s      37.5
+  concurrency   aggregate tok/s (range)    TTFT p50 (range)         TPS p50/stream   errors
+  1             135.0 (122.5–156.3)        0.60s (0.39s–0.79s)      197.1            –
+  2             261.4 (246.4–265.5)        0.57s (0.51s–0.68s)      184.6            –
+  4             414.0 (390.2–513.6)        0.65s (0.36s–1.04s)      185.8            –
+  8             1026.8 (904.5–1074.8)      0.56s (0.39s–0.91s)      191.1            –
+  16            1753.2 (1741.1–1873.0)     0.65s (0.36s–0.99s)      191.2            –
 ```
+
+<p align="center">
+  <img src="assets/sweep.svg" alt="Bar chart of the sweep above: aggregate tok/s rises from 135 at 1 stream to 1,753 at 16 streams while each stream holds about 190 tok/s" width="100%">
+</p>
+
+That DeepSeek run hasn't saturated at 16 streams: aggregate throughput keeps
+climbing while each stream holds ~190 tok/s. When an endpoint does saturate,
+the aggregate column flattens and the per-stream TPS starts to fall.
 
 ### Cost
 
@@ -190,7 +232,7 @@ endpoint gives the best dollars-per-token throughput.
 
 ### Comparing models
 
-Give `--model` a comma-separated list and tokps benchmarks each model in turn
+Give `--model` a comma-separated list and tokps benchmarks each model
 against the same endpoint, then prints one row per model:
 
 ```text
@@ -201,9 +243,55 @@ tokps — compare @ api.z.ai  (5 runs, 1 warmup)
   glm-5-flash   0.41s      118.2 (110.0–121.9)   101.3     $0.0002    –
 ```
 
+All warmups run first, then the measured runs are **interleaved**
+(A,B,C, B,C,A, C,A,B …) rather than all of A before any of B, so load drift on
+the endpoint — or on your own network — hits every model equally.
+
 `--json` emits an array of the usual per-model objects; `--md` a markdown
 table. `--concurrency` applies to every model; `--sweep` cannot be combined
-with a multi-model `--model`.
+with a comparison.
+
+### Comparing providers
+
+`--target model@url` (repeatable) compares models on *different* endpoints —
+the question "which provider is actually fastest for me?":
+
+```sh
+tokps --target gpt-4o-mini@https://api.openai.com/v1 \
+      --target deepseek-chat@https://api.deepseek.com \
+      --target 'llama-3.3-70b@http://gpu-box:8000/v1#LOCAL_KEY'
+```
+
+Output looks like this (illustrative numbers):
+
+```text
+tokps — compare  (5 runs, 1 warmup)
+
+  target                              TTFT p50   TPS p50 (range)        e2e p50   errors
+  gpt-4o-mini @ api.openai.com        0.38s      84.2 (80.1–88.0)       71.0      –
+  deepseek-chat @ api.deepseek.com    0.62s      211.3 (209.4–213.2)    194.5     –
+  llama-3.3-70b @ gpu-box:8000        0.09s      41.7 (41.5–41.9)       40.9      –
+```
+
+Each target uses its own key (see below); `#VAR` names it explicitly. A
+`--target` without `@url` uses `--url`. Pass the same model on two hosts to
+compare providers serving one open-weights model.
+
+### API keys
+
+For each endpoint tokps uses the first key it finds:
+
+1. `#VAR` on a `--target` (`model@url#MY_KEY`)
+2. `--api-key`
+3. the provider's own variable for the URL's host — `OPENAI_API_KEY`
+   (api.openai.com), `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`,
+   `XAI_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`,
+   `TOGETHER_API_KEY`, `FIREWORKS_API_KEY`, `OPENROUTER_API_KEY`,
+   `DEEPINFRA_API_KEY`, `SAMBANOVA_API_KEY`, `PERPLEXITY_API_KEY`,
+   `MOONSHOT_API_KEY`, `ZAI_API_KEY` (api.z.ai), `ZHIPUAI_API_KEY`
+   (open.bigmodel.cn), `DASHSCOPE_API_KEY`
+4. `API_KEY`
+5. `OPENAI_API_KEY`
 
 ### Failures under load
 
@@ -218,24 +306,29 @@ losing everything measured so far.
   errors            2/40 streams   (429 Too Many Requests ×2)
 ```
 
-Two things still fail fast: any warmup error, and — in sweep or compare
-mode — any error on the first level or model, which is the canary for auth
-and URL mistakes.
+Two things still fail fast: a warmup error on a plain run, and — in sweep or
+compare mode — any error on the first level or model, which is the canary for
+auth and URL mistakes. Past the canary, a warmup batch where only some
+streams failed (one 429 among eight) prints a warning and the level is
+measured anyway.
 
 ### CI gates
 
-`--min-tps` and `--max-ttft` turn tokps into a deployment check: after the
-normal report, each violated threshold is printed as a `FAIL:` line on
-stderr and the process exits with code **3**.
+`--min-tps`, `--max-ttft` and `--max-error-rate` turn tokps into a
+deployment check: after the normal report, each violated threshold is printed
+as a `FAIL:` line on stderr and the process exits with code **3**.
 
-Thresholds are checked against **successful streams only**. Failed streams
-(see *Failures under load*) appear in the `errors` line but do not by
-themselves fail a gate; a run in which *no* stream succeeded fails with
-`FAIL: no successful streams`. `--max-ttft` also fails when the endpoint did
-not stream (TTFT is unavailable).
+`--min-tps` and `--max-ttft` are checked against **successful streams
+only**, so pair them with `--max-error-rate` — otherwise a run where 7 of 8
+streams were 429'd can pass on the one that got through. `--max-error-rate`
+takes a fraction or a percentage (`0.05`, `5%`); `0` allows no failures. A
+run in which *no* stream succeeded always fails with `FAIL: no successful
+streams`, and `--max-ttft` also fails when the endpoint did not stream (TTFT
+is unavailable).
 
 ```sh
-tokps --url http://vllm:8000/v1 --model my-model --min-tps 50 --max-ttft 1s --quiet
+tokps --url http://vllm:8000/v1 --model my-model \
+  --min-tps 50 --max-ttft 1s --max-error-rate 0 --quiet
 ```
 
 In sweep and compare mode the thresholds apply to every level / model.
@@ -264,15 +357,42 @@ redirected, and `--quiet` turns them off along with warnings.
 | `0` | success |
 | `1` | request or benchmark error (including no successful stream at all) |
 | `2` | usage error |
-| `3` | a `--min-tps` / `--max-ttft` gate failed |
+| `3` | a `--min-tps` / `--max-ttft` / `--max-error-rate` gate failed |
 | `130` | interrupted (Ctrl-C / SIGTERM) |
 
 ### Reasoning models
 
-Reasoning models such as **GLM-5.2** and DeepSeek-R1 stream their thinking
-tokens in `delta.reasoning_content` rather than `delta.content`, often by
-default. tokps counts those toward timing and throughput, so TTFT and
-TPS reflect the full generation including the reasoning phase.
+Reasoning models such as DeepSeek, **GLM-5.2** and Qwen stream their thinking
+in `delta.reasoning_content` before the answer. tokps counts those tokens
+toward TPS — the model generated them — and splits them out, because what a
+user waits for is the *answer*:
+
+```text
+tokps — deepseek-flash @ api.deepseek.com  (3 runs, 1 warmup)
+
+  prompt tokens     41
+  output tokens     284   (exact, median)
+  thinking          190   (exact, median; answer 94)
+
+  TTFT     p50 0.89s   range 0.85s–0.96s
+  answer   p50 2.07s   range 1.86s–2.21s   (first answer token, after thinking)
+  TPS      p50 192.2   range 188.0–205.1   (generation, N-1)
+  e2e      p50 120.4   range 117.7–126.0   (incl. TTFT)
+```
+
+`TTFT` is the first token of any kind; `answer` is the first answer token.
+The thinking count comes from `usage.completion_tokens_details` when the
+server reports it (`exact`), otherwise it is apportioned by streamed text
+length (`estimated`). If thinking eats the whole `--max-tokens` budget, the
+`answer` line says `not reached` — raise `--max-tokens`, or turn thinking
+off with `--extra-body`.
+
+OpenAI's o-series and gpt-5 think *without streaming it*: the hidden tokens
+are billed in `completion_tokens` but generated before the first visible
+token. tokps excludes them from TPS (dividing them by the visible window
+would overstate it many times over) and shows them as
+`thinking … (hidden — not streamed, excluded from TPS)`; their thinking time
+is inside TTFT.
 
 Some newer OpenAI models reject `max_tokens` and require
 `max_completion_tokens`. tokps defaults to `max_tokens` but automatically

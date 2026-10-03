@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="tokps logo">
+<defs><filter id="lglow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter><linearGradient id="lbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34425a"/><stop offset="1" stop-color="#263142"/></linearGradient></defs>
+<rect x="8" y="8" width="240" height="240" rx="56" fill="url(#lbg)"/>
+<circle cx="128" cy="128" r="92.04" fill="none" stroke="#c9ced8" stroke-width="8.26"/>
+<line x1="128.00" y1="35.96" x2="128.00" y2="51.30" stroke="#c9ced8" stroke-width="8.26" stroke-linecap="round"/>
+<line x1="174.02" y1="48.29" x2="166.35" y2="61.58" stroke="#c9ced8" stroke-width="8.26" stroke-linecap="round"/>
+<line x1="207.71" y1="81.98" x2="194.42" y2="89.65" stroke="#c9ced8" stroke-width="8.26" stroke-linecap="round"/>
+<line x1="220.04" y1="128.00" x2="204.70" y2="128.00" stroke="#c9ced8" stroke-width="8.26" stroke-linecap="round"/>
+<line x1="193.08" y1="193.08" x2="182.24" y2="182.24" stroke="#c9ced8" stroke-width="8.26" stroke-linecap="round"/>
+<line x1="62.92" y1="193.08" x2="73.76" y2="182.24" stroke="#c9ced8" stroke-width="8.26" stroke-linecap="round"/>
+<line x1="35.96" y1="128.00" x2="51.30" y2="128.00" stroke="#c9ced8" stroke-width="8.26" stroke-linecap="round"/>
+<line x1="48.29" y1="81.98" x2="61.58" y2="89.65" stroke="#c9ced8" stroke-width="8.26" stroke-linecap="round"/>
+<line x1="81.98" y1="48.29" x2="89.65" y2="61.58" stroke="#c9ced8" stroke-width="8.26" stroke-linecap="round"/>
+<g filter="url(#lglow)" fill="#4ade80"><path d="M128.00 61.92 A66.08 66.08 0 0 1 161.04 185.23" fill="none" stroke="#4ade80" stroke-width="8.26" stroke-linecap="round" stroke-dasharray="10.62 12.98"/><circle cx="128.00" cy="61.92" r="7.67"/><circle cx="170.48" cy="77.38" r="7.67"/><circle cx="193.08" cy="116.53" r="7.67"/><circle cx="190.09" cy="150.60" r="7.67"/><circle cx="161.04" cy="185.23" r="7.67"/></g>
+<polyline points="117.38,149.24 143.34,175.20 117.38,201.16" fill="none" stroke="#c9ced8" stroke-width="8.26" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

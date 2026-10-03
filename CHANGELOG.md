@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Cross-provider compare: `--target model@url` (repeatable) benchmarks models
+  on different endpoints side by side — DeepSeek vs OpenAI vs your own vLLM in
+  one table. Append `#ENV_VAR` to name the key variable for a target.
+- Provider key discovery: tokps reads the provider's own key variable for
+  well-known hosts (`DEEPSEEK_API_KEY` for api.deepseek.com, `OPENAI_API_KEY`
+  for api.openai.com, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, and more), so
+  most setups need no key flags at all.
+- Reasoning-model split: when a model thinks, the summary shows thinking vs
+  answer tokens and an `answer` line — time to the first answer token, which
+  is what a user actually waits for. `--json` gains a `reasoning` object and
+  per-run `reasoning_tokens` / `ttfa_s`; compare tables gain an `answer p50`
+  column. A run whose thinking used the whole budget says so instead of
+  reporting a misleading answer time.
+- `--max-error-rate` CI gate (`0.05` or `5%`; `0` = no failures allowed):
+  exit 3 when too many measured streams failed. `--min-tps`/`--max-ttft`
+  only look at successful streams, so a run where 7 of 8 streams were 429'd
+  could pass them.
+
+### Changed
+- Model comparisons interleave their measured runs (A,B,C, B,C,A, …) after
+  all warmups, instead of running every A before any B, so load drift on the
+  endpoint — or your network — hits every model equally.
+- A later sweep level (or compared model) no longer fails outright because
+  one of its warmup streams was rejected (one 429 among eight); it warns and
+  measures. The first level/model is still a strict canary.
+- API key precedence is now `--api-key` > the provider's own variable for
+  the URL's host > `API_KEY` > `OPENAI_API_KEY`. Previously `API_KEY` won
+  even when it belonged to a different provider.
+
+### Fixed
+- TPS for models that bill hidden reasoning tokens (OpenAI o-series,
+  gpt-5): those tokens were generated before the first visible token but
+  were divided by the visible generation window, overstating TPS by up to an
+  order of magnitude. They are now excluded from the generation rate and
+  shown as `thinking … (hidden)`.
+
 ## [0.2.0] - 2026-09-13
 
 ### Changed

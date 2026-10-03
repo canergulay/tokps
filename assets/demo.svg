@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 364" width="1000" height="364" role="img" aria-label="Terminal: tokps comparing deepseek-chat, deepseek-flash and deepseek-v4-pro — TTFT, time to first answer, TPS and end-to-end throughput per model.">
+<style>
+  text { font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; font-size: 15px; }
+  .cover { opacity: 0; }
+  @keyframes type0 { from { opacity: 1; transform: translateX(0); } to { opacity: 1; transform: translateX(525px); } }
+@keyframes type1 { from { opacity: 1; transform: translateX(0); } to { opacity: 1; transform: translateX(534px); } }
+@keyframes type2 { from { opacity: 1; transform: translateX(0); } to { opacity: 1; transform: translateX(543px); } }
+@keyframes type3 { from { opacity: 1; transform: translateX(0); } to { opacity: 1; transform: translateX(642px); } }
+  .ln { animation: show .35s ease-out backwards; }
+  @keyframes show { from { opacity: 0; } }
+  .cur { animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .cover { display: none; } .ln { opacity: 1; animation: none; } }
+</style>
+<rect x="0.5" y="0.5" width="999" height="363" rx="14" fill="#0f141b" stroke="#2a3442"/>
+<path d="M0.5 44 V14.5 a14 14 0 0 1 14-14 H985.5 a14 14 0 0 1 14 14 V44 Z" fill="#161d27"/>
+<line x1="0.5" y1="44" x2="999.5" y2="44" stroke="#2a3442"/>
+<circle cx="24" cy="22" r="6" fill="#ff5f57"/><circle cx="44" cy="22" r="6" fill="#febc2e"/><circle cx="64" cy="22" r="6" fill="#28c840"/>
+<text x="500.0" y="27" text-anchor="middle" fill="#7d8896" style="font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;font-size:13px">tokps — real run against api.deepseek.com</text>
+<text x="28" y="78" xml:space="preserve"><tspan fill="#4ade80">$ </tspan><tspan fill="#eef2f6" font-weight="700">tokps</tspan><tspan fill="#c7d0db"> --target deepseek-chat@https://api.deepseek.com \</tspan></text>
+<rect x="26" y="61" width="525" height="24" fill="#0f141b" style="animation: type0 1.03s steps(57) 0.40s backwards" class="cover"/>
+<text x="28" y="102" xml:space="preserve"><tspan fill="#4ade80">  </tspan><tspan fill="#eef2f6" font-weight="700"></tspan><tspan fill="#c7d0db">      --target deepseek-flash@https://api.deepseek.com \</tspan></text>
+<rect x="26" y="85" width="534" height="24" fill="#0f141b" style="animation: type1 1.04s steps(58) 1.55s backwards" class="cover"/>
+<text x="28" y="126" xml:space="preserve"><tspan fill="#4ade80">  </tspan><tspan fill="#eef2f6" font-weight="700"></tspan><tspan fill="#c7d0db">      --target deepseek-v4-pro@https://api.deepseek.com \</tspan></text>
+<rect x="26" y="109" width="543" height="24" fill="#0f141b" style="animation: type2 1.06s steps(59) 2.71s backwards" class="cover"/>
+<text x="28" y="150" xml:space="preserve"><tspan fill="#4ade80">  </tspan><tspan fill="#eef2f6" font-weight="700"></tspan><tspan fill="#c7d0db">      --prompt &#x27;Why is the sky blue? 3 sentences.&#x27; --max-tokens 2048</tspan></text>
+<rect x="26" y="133" width="642" height="24" fill="#0f141b" style="animation: type3 1.26s steps(70) 3.89s backwards" class="cover"/>
+<text x="28" y="198" fill="#eef2f6" font-weight="700" xml:space="preserve" class="ln" style="animation-delay:5.77s">tokps — compare @ api.deepseek.com  (3 runs, 1 warmup)</text>
+<text x="28" y="246" fill="#7d8896" xml:space="preserve" class="ln" style="animation-delay:5.95s">  model             TTFT p50     answer p50    TPS p50 (range)          e2e p50     errors</text>
+<text x="28" y="270" fill="#c7d0db" xml:space="preserve" class="ln" style="animation-delay:6.13s">  deepseek-chat     0.65s        –             133.4 (132.4–144.5)      72.5        –</text>
+<text x="28" y="294" fill="#c7d0db" xml:space="preserve" class="ln" style="animation-delay:6.68s">  deepseek-flash    0.96s        1.86s         205.1 (198.3–229.5)      117.7       –</text>
+<text x="28" y="318" fill="#c7d0db" xml:space="preserve" class="ln" style="animation-delay:7.23s">  deepseek-v4-pro   0.94s        1.64s         89.0 (88.8–102.8)        61.8        –</text>
+<rect x="28" y="327" width="9" height="18" fill="#4ade80" class="cur"/>
+</svg>
