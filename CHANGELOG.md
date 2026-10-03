@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-03
+
 ### Added
 - Cross-provider compare: `--target model@url` (repeatable) benchmarks models
   on different endpoints side by side — DeepSeek vs OpenAI vs your own vLLM in
@@ -35,14 +37,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   measures. The first level/model is still a strict canary.
 - API key precedence is now `--api-key` > the provider's own variable for
   the URL's host > `API_KEY` > `OPENAI_API_KEY`. Previously `API_KEY` won
-  even when it belonged to a different provider.
+  even when it belonged to a different provider, and `OPENAI_API_KEY` was
+  sent to any host; it is now only used for OpenAI and unknown hosts.
 
 ### Fixed
 - TPS for models that bill hidden reasoning tokens (OpenAI o-series,
   gpt-5): those tokens were generated before the first visible token but
   were divided by the visible generation window, overstating TPS by up to an
   order of magnitude. They are now excluded from the generation rate and
-  shown as `thinking … (hidden)`.
+  shown as `thinking … (hidden)`. Providers that report reasoning on top of
+  `completion_tokens` (xAI) are recognized from `total_tokens`.
 
 ## [0.2.0] - 2026-09-13
 
@@ -120,6 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallback.
 - `--version` flag.
 
-[Unreleased]: https://github.com/canergulay/tokps/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/canergulay/tokps/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/canergulay/tokps/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/canergulay/tokps/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/canergulay/tokps/releases/tag/v0.1.0
