@@ -3,6 +3,7 @@ package report
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/canergulay/tokps/internal/bench"
 )
@@ -31,6 +32,13 @@ func FormatMarkdown(w io.Writer, s bench.Summary, detail bool) {
 	if s.Streamed() {
 		t := s.TTFT()
 		fmt.Fprintf(w, "| TTFT | %s | %s | %s |\n", secs(t.P50), secs(t.Min), secs(t.Max))
+		if s.Reasoning() && !s.HiddenReasoning() {
+			if a, reached := s.TTFA(); reached > 0 {
+				fmt.Fprintf(w, "| first answer | %s | %s | %s |\n", secs(a.P50), secs(a.Min), secs(a.Max))
+			} else {
+				fmt.Fprintln(w, "| first answer | not reached | | |")
+			}
+		}
 	}
 	g := s.GenTPS()
 	fmt.Fprintf(w, "| TPS (gen) | %.1f | %.1f | %.1f |\n", g.P50, g.Min, g.Max)
@@ -42,6 +50,10 @@ func FormatMarkdown(w io.Writer, s bench.Summary, detail bool) {
 		}
 	}
 	fmt.Fprintf(w, "| output tokens | %d (%s) | | |\n", s.MedianOutputTokens(), exactLabel(s.Exact()))
+	if s.Reasoning() {
+		fmt.Fprintf(w, "| thinking tokens | %d (%s) | | |\n", s.MedianReasoningTokens(),
+			thinkingNote(s.ReasoningExact(), s.HiddenReasoning(), true, s.MedianOutputTokens()-s.MedianReasoningTokens()))
+	}
 	if s.CostConfigured() {
 		fmt.Fprintf(w, "| cost/req | %s | | |\n", usd(s.Cost().P50))
 	}
@@ -63,8 +75,18 @@ func formatMarkdownSingle(w io.Writer, s bench.Summary, detail bool) {
 		fmt.Fprintln(w, "| prompt tokens | n/a |")
 	}
 	fmt.Fprintf(w, "| output tokens | %d (%s) |\n", r.OutputTokens, exactLabel(r.TokensExact))
+	if r.Reasoning {
+		fmt.Fprintf(w, "| thinking tokens | %d (%s) |\n", r.ReasoningTokens, thinkingNote(r.ReasoningExact, r.HiddenReasoning, false, r.AnswerTokens()))
+	}
 	if r.Streamed {
 		fmt.Fprintf(w, "| time to first | %s |\n", dur(r.TTFT))
+		if r.Reasoning && !r.HiddenReasoning {
+			if r.TTFA > 0 {
+				fmt.Fprintf(w, "| first answer | %s |\n", dur(r.TTFA))
+			} else {
+				fmt.Fprintln(w, "| first answer | not reached |")
+			}
+		}
 		fmt.Fprintf(w, "| generation | %s |\n", dur(r.GenTime))
 	} else {
 		fmt.Fprintln(w, "| time to first | n/a |")
@@ -107,29 +129,38 @@ func FormatCompareMarkdown(w io.Writer, sums []bench.Summary) {
 	if len(sums) == 0 {
 		return
 	}
+	mixed := mixedHosts(sums)
 	cost := anyCost(sums)
+	answer := anyReasoning(sums)
 	fmt.Fprintf(w, "**tokps — %s**\n\n", compareHeader(sums))
-	if cost {
-		fmt.Fprintln(w, "| model | TTFT p50 | TPS p50 (range) | e2e p50 | cost/req | errors |")
-		fmt.Fprintln(w, "|---|---|---|---|---|---|")
-	} else {
-		fmt.Fprintln(w, "| model | TTFT p50 | TPS p50 (range) | e2e p50 | errors |")
-		fmt.Fprintln(w, "|---|---|---|---|---|")
+
+	cols := []string{firstColumn(mixed), "TTFT p50"}
+	if answer {
+		cols = append(cols, "answer p50")
 	}
+	cols = append(cols, "TPS p50 (range)", "e2e p50")
+	if cost {
+		cols = append(cols, "cost/req")
+	}
+	cols = append(cols, "errors")
+	fmt.Fprintf(w, "| %s |\n", strings.Join(cols, " | "))
+	fmt.Fprintf(w, "|%s\n", strings.Repeat("---|", len(cols)))
+
 	for _, s := range sums {
 		if s.AllFailed() {
-			if cost {
-				fmt.Fprintf(w, "| %s | failed (%s) | | | | |\n", s.Model, errorGroupsText(s))
-			} else {
-				fmt.Fprintf(w, "| %s | failed (%s) | | | |\n", s.Model, errorGroupsText(s))
-			}
+			fmt.Fprintf(w, "| %s | failed (%s) |%s\n", rowName(s, mixed), errorGroupsText(s), strings.Repeat(" |", len(cols)-2))
 			continue
 		}
-		fmt.Fprintf(w, "| %s | %s | %s | %.1f |", s.Model, ttftP50Cell(s), tpsCell(s), s.E2ETPS().P50)
-		if cost {
-			fmt.Fprintf(w, " %s |", costCell(s))
+		cells := []string{rowName(s, mixed), ttftP50Cell(s)}
+		if answer {
+			cells = append(cells, answerCell(s))
 		}
-		fmt.Fprintf(w, " %s |\n", errorsCell(s))
+		cells = append(cells, tpsCell(s), fmt.Sprintf("%.1f", s.E2ETPS().P50))
+		if cost {
+			cells = append(cells, costCell(s))
+		}
+		cells = append(cells, errorsCell(s))
+		fmt.Fprintf(w, "| %s |\n", strings.Join(cells, " | "))
 	}
 	fmt.Fprintln(w)
 }

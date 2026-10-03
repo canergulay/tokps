@@ -87,6 +87,8 @@ type options struct {
 	extraBody                        string
 	minTPS                           float64
 	maxTTFT                          time.Duration
+	maxErrorRate                     rateValue
+	targets                          targetsValue
 }
 
 // parseFlags defines and parses the CLI flags. It returns the parsed options,
@@ -97,9 +99,10 @@ func parseFlags(args []string, stderr io.Writer) (*options, []string, int) {
 	fs.SetOutput(stderr)
 	opts := &options{}
 
-	fs.StringVar(&opts.url, "url", "", "Base URL of the OpenAI-compatible endpoint (required)")
+	fs.StringVar(&opts.url, "url", "", "Base URL of the OpenAI-compatible endpoint (required unless every --target has one)")
 	fs.StringVar(&opts.model, "model", "", "Model name (required); a comma-separated list benchmarks each and prints a comparison table")
-	fs.StringVar(&opts.apiKey, "api-key", "", "API key (defaults to the API_KEY env var, then OPENAI_API_KEY)")
+	fs.Var(&opts.targets, "target", "Endpoint to compare, as model[@url][#KEY_ENV_VAR]; repeat to compare across providers")
+	fs.StringVar(&opts.apiKey, "api-key", "", "API key (defaults to the provider's own env var, e.g. DEEPSEEK_API_KEY, then API_KEY, then OPENAI_API_KEY)")
 	fs.StringVar(&opts.prompt, "prompt", defaultPrompt, "Test prompt to send")
 	fs.IntVar(&opts.maxTokens, "max-tokens", 512, "Maximum output tokens")
 	fs.StringVar(&opts.maxTokensField, "max-tokens-field", "", "Request field for the output cap: max_tokens (default) or max_completion_tokens")
@@ -119,6 +122,7 @@ func parseFlags(args []string, stderr io.Writer) (*options, []string, int) {
 	fs.BoolVar(&opts.quiet, "quiet", false, "Suppress progress and warnings on stderr (errors are still printed)")
 	fs.Float64Var(&opts.minTPS, "min-tps", 0, "CI gate: exit 3 if generation TPS p50 is below this (tok/s)")
 	fs.DurationVar(&opts.maxTTFT, "max-ttft", 0, "CI gate: exit 3 if TTFT p50 exceeds this (e.g. 1.5s)")
+	fs.Var(&opts.maxErrorRate, "max-error-rate", "CI gate: exit 3 if more than this share of streams failed (0.05 or 5%; 0 = none allowed)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -176,17 +180,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "tokps", version)
 		return 0
 	}
-	if opts.url == "" || opts.model == "" {
-		fmt.Fprintln(stderr, "error: --url and --model are required")
-		return 2
-	}
-	models, err := bench.ParseModels(opts.model)
+	targets, err := buildTargets(opts, os.Getenv)
 	if err != nil {
-		fmt.Fprintf(stderr, "error: --model: %v\n", err)
+		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 2
 	}
-	if len(models) > 1 && opts.sweep.enabled {
-		fmt.Fprintln(stderr, "error: --sweep and a multi-model --model cannot be combined")
+	if len(targets) > 1 && opts.sweep.enabled {
+		fmt.Fprintln(stderr, "error: --sweep cannot be combined with several models or targets")
 		return 2
 	}
 	if opts.md && opts.jsonOut {
@@ -232,18 +232,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	key := opts.apiKey
-	if key == "" {
-		key = os.Getenv("API_KEY")
-	}
-	if key == "" {
-		key = os.Getenv("OPENAI_API_KEY")
-	}
-
 	cfg := bench.Config{
-		URL:            opts.url,
-		Model:          models[0],
-		APIKey:         key,
+		URL:            targets[0].URL,
+		Model:          targets[0].Model,
+		APIKey:         targets[0].APIKey,
 		Prompt:         opts.prompt,
 		MaxTokens:      opts.maxTokens,
 		MaxTokensField: opts.maxTokensField,
@@ -266,7 +258,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	gate := bench.Gate{MinTPS: opts.minTPS, MaxTTFT: opts.maxTTFT}
+	gate := bench.Gate{MinTPS: opts.minTPS, MaxTTFT: opts.maxTTFT, MaxErrorRate: opts.maxErrorRate.v}
 
 	if opts.sweep.enabled {
 		sums, err := bench.RunSweep(ctx, cfg, opts.runs, opts.warmup, opts.sweep.levels)
@@ -277,14 +269,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
-		if checkGates(gate, sums, levelLabel, stderr) {
+		if checkGates(gate, sums, func(i int) string { return fmt.Sprintf("c=%d", sums[i].Concurrency) }, stderr) {
 			return exitGateFailed
 		}
 		return 0
 	}
 
-	if len(models) > 1 {
-		sums, err := bench.RunCompare(ctx, cfg, models, opts.runs, opts.warmup, opts.concurrency)
+	if len(targets) > 1 {
+		sums, err := bench.RunCompare(ctx, cfg, targets, opts.runs, opts.warmup, opts.concurrency)
 		if err != nil {
 			return reportErr(err, stderr, opts.runs)
 		}
@@ -292,7 +284,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
-		if checkGates(gate, sums, modelLabel, stderr) {
+		labels := bench.TargetLabels(cfg, targets)
+		if checkGates(gate, sums, func(i int) string { return labels[i] }, stderr) {
 			return exitGateFailed
 		}
 		return 0
@@ -306,7 +299,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1
 	}
-	if checkGates(gate, []bench.Summary{sum}, noLabel, stderr) {
+	if checkGates(gate, []bench.Summary{sum}, func(int) string { return "" }, stderr) {
 		return exitGateFailed
 	}
 	return 0

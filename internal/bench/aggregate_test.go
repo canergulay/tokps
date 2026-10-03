@@ -523,3 +523,35 @@ func TestNewStreamErrorCapsText(t *testing.T) {
 		t.Errorf("Status = %d, want 0 for a non-HTTP error", se.Status)
 	}
 }
+
+func TestRunSweepToleratesPartialWarmupFailureOnLaterLevel(t *testing.T) {
+	// Level 1: calls 1-2. Level 4's warmup is calls 3-6; one of them (call 4)
+	// is 429'd. Past the canary that is a warning, not a lost level.
+	ts, _ := scriptedServer(t, func(n int) bool { return n == 4 })
+	defer ts.Close()
+
+	cfg := testConfig(ts.URL)
+	var warnings []string
+	cfg.Warnf = func(format string, args ...any) { warnings = append(warnings, fmt.Sprintf(format, args...)) }
+
+	sums, err := RunSweep(context.Background(), cfg, 1, 1, []int{1, 4})
+	if err != nil {
+		t.Fatalf("RunSweep error: %v", err)
+	}
+	if sums[1].AllFailed() || len(sums[1].Results) != 4 || sums[1].Failed() != 0 {
+		t.Errorf("level 4: results=%d failed=%d, want 4/0", len(sums[1].Results), sums[1].Failed())
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "1/4 streams failed") {
+		t.Errorf("warnings = %q, want one partial-warmup warning", warnings)
+	}
+}
+
+func TestRunNWarmupStillStrictOnPartialFailure(t *testing.T) {
+	// A plain run is its own canary: one failed warmup stream aborts.
+	ts, _ := scriptedServer(t, func(n int) bool { return n == 2 })
+	defer ts.Close()
+
+	if _, err := RunN(context.Background(), testConfig(ts.URL), 1, 1, 4); err == nil {
+		t.Fatal("expected a partial warmup failure to abort a plain run")
+	}
+}

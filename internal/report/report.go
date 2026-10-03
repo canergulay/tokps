@@ -22,9 +22,19 @@ func Format(w io.Writer, r bench.Result) {
 	}
 
 	fmt.Fprintf(w, "  output tokens     %d   (%s)\n", r.OutputTokens, exactLabel(r.TokensExact))
+	if r.Reasoning {
+		fmt.Fprintf(w, "  thinking          %d   (%s)\n", r.ReasoningTokens, thinkingNote(r.ReasoningExact, r.HiddenReasoning, false, r.AnswerTokens()))
+	}
 
 	if r.Streamed {
 		fmt.Fprintf(w, "  time to first     %s\n", dur(r.TTFT))
+		if r.Reasoning && !r.HiddenReasoning {
+			if r.TTFA > 0 {
+				fmt.Fprintf(w, "  first answer      %s   (after thinking)\n", dur(r.TTFA))
+			} else {
+				fmt.Fprintf(w, "  first answer      not reached   (%s)\n", notReachedHint)
+			}
+		}
 		fmt.Fprintf(w, "  generation        %s\n", dur(r.GenTime))
 	} else {
 		fmt.Fprintf(w, "  time to first     n/a\n")
@@ -74,6 +84,10 @@ func FormatSummary(w io.Writer, s bench.Summary, detail bool) {
 		medianNote = "median/stream"
 	}
 	fmt.Fprintf(w, "  output tokens     %d   (%s, %s)\n", s.MedianOutputTokens(), exactLabel(s.Exact()), medianNote)
+	if s.Reasoning() {
+		fmt.Fprintf(w, "  thinking          %d   (%s)\n", s.MedianReasoningTokens(),
+			thinkingNote(s.ReasoningExact(), s.HiddenReasoning(), true, s.MedianOutputTokens()-s.MedianReasoningTokens()))
+	}
 	if s.CostConfigured() {
 		fmt.Fprintf(w, "  cost              %s  (median, per request)\n", usd(s.Cost().P50))
 	}
@@ -98,6 +112,7 @@ func FormatSummary(w io.Writer, s bench.Summary, detail bool) {
 	ttft, gen, e2e := s.TTFT(), s.GenTPS(), s.E2ETPS()
 	if s.Streamed() {
 		fmt.Fprintf(w, "  TTFT     p50 %s   range %s–%s\n", secs(ttft.P50), secs(ttft.Min), secs(ttft.Max))
+		writeAnswerLine(w, s)
 	}
 	fmt.Fprintf(w, "  TPS      p50 %.1f   range %.1f–%.1f   (generation, N-1%s)\n", gen.P50, gen.Min, gen.Max, per)
 	fmt.Fprintf(w, "  e2e      p50 %.1f   range %.1f–%.1f   (incl. TTFT%s)\n", e2e.P50, e2e.Min, e2e.Max, per)
@@ -105,6 +120,43 @@ func FormatSummary(w io.Writer, s bench.Summary, detail bool) {
 		writeITL(w, s)
 	}
 	fmt.Fprintln(w)
+}
+
+// notReachedHint explains a reasoning stream that never got to the answer.
+const notReachedHint = "thinking used the whole budget — raise --max-tokens"
+
+// thinkingNote annotates the thinking-token line: where the count came from
+// and how much of the output was the answer.
+func thinkingNote(exact, hidden, median bool, answer int) string {
+	src := "estimated"
+	if exact {
+		src = "exact"
+	}
+	if median {
+		src += ", median"
+	}
+	if hidden {
+		return src + ", hidden — not streamed, excluded from TPS"
+	}
+	return fmt.Sprintf("%s; answer %d", src, answer)
+}
+
+// writeAnswerLine adds time-to-first-answer for reasoning models that
+// stream their thinking: TTFT then only marks the first thinking token.
+func writeAnswerLine(w io.Writer, s bench.Summary) {
+	if !s.Reasoning() || s.HiddenReasoning() {
+		return
+	}
+	a, reached := s.TTFA()
+	switch {
+	case reached == 0:
+		fmt.Fprintf(w, "  answer   not reached   (%s)\n", notReachedHint)
+	case reached < len(s.Results):
+		fmt.Fprintf(w, "  answer   p50 %s   range %s–%s   (first answer token; %d/%d runs reached it)\n",
+			secs(a.P50), secs(a.Min), secs(a.Max), reached, len(s.Results))
+	default:
+		fmt.Fprintf(w, "  answer   p50 %s   range %s–%s   (first answer token, after thinking)\n", secs(a.P50), secs(a.Min), secs(a.Max))
+	}
 }
 
 // writeITL appends the inter-token-latency line when streaming gaps exist.
@@ -129,11 +181,22 @@ type jsonRun struct {
 	OutputTokens int     `json:"output_tokens"`
 	Exact        bool    `json:"exact"`
 	TTFTSeconds  float64 `json:"ttft_s"`
+	TTFASeconds  float64 `json:"ttfa_s,omitempty"`
+	Reasoning    int     `json:"reasoning_tokens,omitempty"`
 	GenSeconds   float64 `json:"gen_s"`
 	WallSeconds  float64 `json:"wall_s"`
 	TPS          float64 `json:"tps"`
 	E2ETPS       float64 `json:"e2e_tps"`
 	CostUsd      float64 `json:"cost_usd"`
+}
+
+// jsonReasoning describes the thinking phase of a reasoning model.
+type jsonReasoning struct {
+	TokensMedian int        `json:"tokens_median"`
+	Exact        bool       `json:"exact"`
+	Hidden       bool       `json:"hidden"`
+	TTFASeconds  *jsonRange `json:"ttfa_s,omitempty"`
+	AnswerRuns   int        `json:"answer_runs"`
 }
 
 type jsonStreamError struct {
@@ -157,6 +220,7 @@ type summaryJSON struct {
 	OutputTokensMedian int               `json:"output_tokens_median"`
 	TokensExact        bool              `json:"tokens_exact"`
 	Streamed           bool              `json:"streamed"`
+	Reasoning          *jsonReasoning    `json:"reasoning,omitempty"`
 	AggregateTPS       *jsonRange        `json:"aggregate_tps,omitempty"`
 	TTFTSeconds        jsonRange         `json:"ttft_s"`
 	TPS                jsonRange         `json:"tps"`
@@ -196,13 +260,28 @@ func toJSON(s bench.Summary) summaryJSON {
 	if p50, p95, ok := s.ITL(); ok {
 		out.ITLMillis = &jsonITL{P50: p50, P95: p95}
 	}
+	if s.Reasoning() {
+		a, reached := s.TTFA()
+		out.Reasoning = &jsonReasoning{
+			TokensMedian: s.MedianReasoningTokens(), Exact: s.ReasoningExact(),
+			Hidden: s.HiddenReasoning(), AnswerRuns: reached,
+		}
+		if reached > 0 {
+			out.Reasoning.TTFASeconds = &jsonRange{a.Min, a.P50, a.Max}
+		}
+	}
 	for _, r := range s.Results {
-		out.RunsDetail = append(out.RunsDetail, jsonRun{
+		run := jsonRun{
 			OutputTokens: r.OutputTokens, Exact: r.TokensExact,
 			TTFTSeconds: r.TTFT.Seconds(), GenSeconds: r.GenTime.Seconds(),
 			WallSeconds: r.TotalWall.Seconds(), TPS: r.TPS(), E2ETPS: r.EndToEndTPS(),
 			CostUsd: r.Cost,
-		})
+		}
+		if r.Reasoning {
+			run.Reasoning = r.ReasoningTokens
+			run.TTFASeconds = r.TTFA.Seconds()
+		}
+		out.RunsDetail = append(out.RunsDetail, run)
 	}
 	for _, e := range s.Errors {
 		out.ErrorsDetail = append(out.ErrorsDetail, jsonStreamError{Batch: e.Batch, Status: e.Status, Error: e.Err})

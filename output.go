@@ -9,7 +9,8 @@ import (
 	"github.com/canergulay/tokps/internal/report"
 )
 
-// exitGateFailed is returned when a --min-tps / --max-ttft threshold fails.
+// exitGateFailed is returned when a --min-tps / --max-ttft / --max-error-rate
+// threshold fails.
 const exitGateFailed = 3
 
 // reportErr prints a benchmark error and returns the exit code: 130 for an
@@ -25,13 +26,13 @@ func reportErr(err error, stderr io.Writer, runs int) int {
 }
 
 // checkGates prints one FAIL line per violated threshold across sums,
-// prefixed with labelOf(s) when non-empty, and reports whether any failed.
-func checkGates(gate bench.Gate, sums []bench.Summary, labelOf func(bench.Summary) string, stderr io.Writer) bool {
+// prefixed with labelOf(i) when non-empty, and reports whether any failed.
+func checkGates(gate bench.Gate, sums []bench.Summary, labelOf func(i int) string, stderr io.Writer) bool {
 	failed := false
-	for _, s := range sums {
+	for i, s := range sums {
 		for _, msg := range gate.Check(s) {
 			failed = true
-			if l := labelOf(s); l != "" {
+			if l := labelOf(i); l != "" {
 				fmt.Fprintf(stderr, "FAIL: %s %s\n", l, msg)
 			} else {
 				fmt.Fprintf(stderr, "FAIL: %s\n", msg)
@@ -40,15 +41,6 @@ func checkGates(gate bench.Gate, sums []bench.Summary, labelOf func(bench.Summar
 	}
 	return failed
 }
-
-// noLabel is the gate-label function for a plain single-endpoint run.
-func noLabel(bench.Summary) string { return "" }
-
-// levelLabel prefixes sweep gate failures with their concurrency level.
-func levelLabel(s bench.Summary) string { return fmt.Sprintf("c=%d", s.Concurrency) }
-
-// modelLabel names a gate failure by its model, for --model a,b comparisons.
-func modelLabel(s bench.Summary) string { return s.Model }
 
 // writeSummary renders one benchmark in the selected format.
 func writeSummary(w io.Writer, s bench.Summary, opts *options) error {

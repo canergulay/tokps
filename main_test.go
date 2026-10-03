@@ -26,7 +26,7 @@ func TestRunRequiresURLAndModel(t *testing.T) {
 	if code := run(nil, &out, &errb); code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
-	if !strings.Contains(errb.String(), "--url and --model are required") {
+	if !strings.Contains(errb.String(), "--url and --model (or --target model@url) are required") {
 		t.Errorf("stderr = %q, want the required-flags error", errb.String())
 	}
 }
@@ -297,7 +297,7 @@ func TestRunRejectsCompareWithSweep(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
-	if !strings.Contains(errb.String(), "--sweep") || !strings.Contains(errb.String(), "--model") {
+	if !strings.Contains(errb.String(), "--sweep cannot be combined") {
 		t.Errorf("stderr = %q, want the sweep/compare conflict error", errb.String())
 	}
 }

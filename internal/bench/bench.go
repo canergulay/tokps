@@ -90,8 +90,20 @@ type chatRequest struct {
 }
 
 type usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
+	PromptTokens            int `json:"prompt_tokens"`
+	CompletionTokens        int `json:"completion_tokens"`
+	CompletionTokensDetails *struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
+}
+
+// reasoningTokens returns the thinking-token count the server reported inside
+// completion_tokens, and whether it reported one at all.
+func (u *usage) reasoningTokens() (int, bool) {
+	if u == nil || u.CompletionTokensDetails == nil {
+		return 0, false
+	}
+	return u.CompletionTokensDetails.ReasoningTokens, true
 }
 
 type streamChunk struct {
@@ -99,12 +111,27 @@ type streamChunk struct {
 		Delta struct {
 			Content string `json:"content"`
 			// ReasoningContent carries thinking-mode tokens for reasoning
-			// models (e.g. GLM-5.2, DeepSeek-R1). These are generated
+			// models (DeepSeek, GLM, Qwen); OpenRouter, Ollama and newer
+			// vLLM name the same field Reasoning. These are generated
 			// tokens and count toward throughput.
-			ReasoningContent string `json:"reasoning_content"`
+			ReasoningContent lenientString `json:"reasoning_content"`
+			Reasoning        lenientString `json:"reasoning"`
 		} `json:"delta"`
 	} `json:"choices"`
 	Usage *usage `json:"usage"`
+}
+
+// lenientString decodes a JSON string and ignores any other type, so a
+// provider that puts an object in a reasoning field cannot turn every chunk
+// into a malformed one.
+type lenientString string
+
+func (s *lenientString) UnmarshalJSON(b []byte) error {
+	var v string
+	if json.Unmarshal(b, &v) == nil {
+		*s = lenientString(v)
+	}
+	return nil
 }
 
 type chatResponse struct {
@@ -250,8 +277,8 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 func runStreaming(resp *http.Response, cfg Config, host string, tSend time.Time, now func() time.Time) (Result, error) {
 	res := Result{Model: cfg.Model, Host: host, PromptTokens: -1, Streamed: true}
 
-	var tFirst, tLast time.Time
-	textRunes := 0
+	var tFirst, tLast, tAnswer time.Time
+	textRunes, reasoningRunes := 0, 0
 	var u *usage
 
 	sc := sse.NewScanner(resp.Body)
@@ -266,20 +293,25 @@ func runStreaming(resp *http.Response, cfg Config, host string, tSend time.Time,
 		if chunk.Usage != nil {
 			u = chunk.Usage
 		}
-		runes := 0
+		answer, thinking := 0, 0
 		if len(chunk.Choices) > 0 {
 			delta := chunk.Choices[0].Delta
-			runes = utf8.RuneCountInString(delta.Content) + utf8.RuneCountInString(delta.ReasoningContent)
+			answer = utf8.RuneCountInString(delta.Content)
+			thinking = utf8.RuneCountInString(string(delta.ReasoningContent)) + utf8.RuneCountInString(string(delta.Reasoning))
 		}
-		if runes > 0 {
+		if answer+thinking > 0 {
 			t := now()
 			if tFirst.IsZero() {
 				tFirst = t
 			} else {
 				res.ITL = append(res.ITL, t.Sub(tLast))
 			}
+			if answer > 0 && tAnswer.IsZero() {
+				tAnswer = t
+			}
 			tLast = t
-			textRunes += runes
+			textRunes += answer + thinking
+			reasoningRunes += thinking
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -295,12 +327,32 @@ func runStreaming(resp *http.Response, cfg Config, host string, tSend time.Time,
 		res.OutputTokens = estimateTokens(textRunes, cfg.CharsPerToken)
 		res.TokensExact = false
 	}
+
+	// Split the output into thinking and answer tokens. Prefer the server's
+	// own count; otherwise apportion the total by streamed text length.
+	reported, ok := u.reasoningTokens()
+	switch {
+	case ok && reported > 0:
+		res.ReasoningTokens = min(reported, res.OutputTokens)
+		res.ReasoningExact = true
+		// Thinking the server counted but never streamed (OpenAI o-series,
+		// gpt-5) happened before the first visible token, so it must not be
+		// divided by the visible generation window.
+		res.HiddenReasoning = reasoningRunes == 0
+	case reasoningRunes > 0 && textRunes > 0:
+		res.ReasoningTokens = int(math.Round(float64(res.OutputTokens) * float64(reasoningRunes) / float64(textRunes)))
+	}
+	res.Reasoning = res.ReasoningTokens > 0 || reasoningRunes > 0
+
 	if !tFirst.IsZero() {
 		res.TTFT = tFirst.Sub(tSend)
 		res.GenTime = tLast.Sub(tFirst)
 		res.TotalWall = tLast.Sub(tSend)
 	} else {
 		res.TotalWall = tEnd.Sub(tSend)
+	}
+	if !tAnswer.IsZero() {
+		res.TTFA = tAnswer.Sub(tSend)
 	}
 	res.Cost = requestCost(cfg, res.PromptTokens, res.OutputTokens)
 	return res, nil
@@ -329,6 +381,11 @@ func runNonStreaming(resp *http.Response, cfg Config, host string, tSend time.Ti
 		res.PromptTokens = cr.Usage.PromptTokens
 		res.OutputTokens = cr.Usage.CompletionTokens
 		res.TokensExact = true
+		if n, ok := cr.Usage.reasoningTokens(); ok && n > 0 {
+			res.ReasoningTokens = min(n, res.OutputTokens)
+			res.ReasoningExact = true
+			res.Reasoning = true
+		}
 	} else {
 		content := ""
 		if len(cr.Choices) > 0 {

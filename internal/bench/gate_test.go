@@ -38,3 +38,31 @@ func TestGateCheck(t *testing.T) {
 		t.Errorf("non-streamed TPS-only gate = %q, want none (TPS falls back to e2e)", got)
 	}
 }
+
+func TestGateMaxErrorRate(t *testing.T) {
+	ok := Result{OutputTokens: 101, GenTime: 2 * time.Second, TTFT: time.Second, TotalWall: 3 * time.Second, Streamed: true}
+	s := Summary{Streams: 8, Results: []Result{ok}, Errors: make([]StreamError, 7)}
+
+	limit := 0.5
+	if !(Gate{MaxErrorRate: &limit}).Enabled() {
+		t.Error("a MaxErrorRate gate should be enabled")
+	}
+	got := (Gate{MaxErrorRate: &limit}).Check(s)
+	if len(got) != 1 || got[0] != "error rate 87.5% (7/8 streams) > max 50.0%" {
+		t.Errorf("gate = %q, want the error-rate failure", got)
+	}
+
+	zero := 0.0
+	clean := Summary{Streams: 1, Results: []Result{ok}}
+	if got := (Gate{MaxErrorRate: &zero}).Check(clean); len(got) != 0 {
+		t.Errorf("zero-tolerance gate on a clean run = %q, want none", got)
+	}
+	one := Summary{Streams: 2, Results: []Result{ok}, Errors: make([]StreamError, 1)}
+	if got := (Gate{MaxErrorRate: &zero}).Check(one); len(got) != 1 {
+		t.Errorf("zero-tolerance gate with one failure = %q, want a failure", got)
+	}
+	exact := 0.5
+	if got := (Gate{MaxErrorRate: &exact}).Check(one); len(got) != 0 {
+		t.Errorf("gate at exactly the limit = %q, want none (inclusive)", got)
+	}
+}

@@ -47,6 +47,36 @@ type Stat struct {
 // *AllFailedError. In both error cases the returned Summary is still
 // populated so callers can report what happened.
 func RunN(ctx context.Context, cfg Config, runs, warmup, concurrency int) (Summary, error) {
+	return runOne(ctx, cfg, runs, warmup, concurrency, false)
+}
+
+// runOne is RunN with a choice of warmup strictness (see runner.warm).
+func runOne(ctx context.Context, cfg Config, runs, warmup, concurrency int, tolerant bool) (Summary, error) {
+	r := newRunner(cfg, runs, warmup, concurrency)
+	if err := r.warm(ctx, tolerant); err != nil {
+		return r.sum, err
+	}
+	for range r.runs {
+		if err := r.measure(ctx); err != nil {
+			return Summary{}, err
+		}
+	}
+	return r.result()
+}
+
+// runner drives one benchmark a batch at a time, so RunCompare can interleave
+// the measured batches of several targets.
+type runner struct {
+	cfg      Config
+	now      func() time.Time
+	runs     int
+	warmup   int
+	conc     int
+	sum      Summary
+	firstErr error
+}
+
+func newRunner(cfg Config, runs, warmup, concurrency int) *runner {
 	if runs < 1 {
 		runs = 1
 	}
@@ -62,47 +92,74 @@ func RunN(ctx context.Context, cfg Config, runs, warmup, concurrency int) (Summa
 		// warmup can establish the connections the timed runs reuse.
 		cfg.Client = poolingClient(concurrency)
 	}
-	sum := Summary{
-		Model:       cfg.Model,
-		Host:        hostOf(cfg.URL),
-		Warmup:      warmup,
-		Concurrency: concurrency,
-		CostIn:      cfg.CostIn,
-		CostOut:     cfg.CostOut,
+	return &runner{
+		cfg: cfg, now: now, runs: runs, warmup: warmup, conc: concurrency,
+		sum: Summary{
+			Model:       cfg.Model,
+			Host:        hostOf(cfg.URL),
+			Warmup:      warmup,
+			Concurrency: concurrency,
+			CostIn:      cfg.CostIn,
+			CostOut:     cfg.CostOut,
+		},
 	}
-	for i := range warmup {
-		if _, _, errs := runBatch(ctx, cfg, concurrency, now); len(errs) > 0 {
+}
+
+// warm runs the discarded warmup batches. A strict warmup fails on any stream
+// error — the canary for auth and URL mistakes. A tolerant one (later sweep
+// levels and compare targets, already past the canary) only fails when every
+// stream of a batch failed; a partial failure such as one 429 among eight
+// streams is reported through Warnf and the benchmark goes on.
+func (r *runner) warm(ctx context.Context, tolerant bool) error {
+	for i := range r.warmup {
+		results, _, errs := runBatch(ctx, r.cfg, r.conc, r.now)
+		if len(errs) > 0 {
 			if ctx.Err() != nil {
-				return Summary{}, &InterruptedError{Completed: 0}
+				return &InterruptedError{Completed: 0}
 			}
-			for _, err := range errs {
-				sum.Errors = append(sum.Errors, newStreamError(0, err))
+			if !tolerant || len(results) == 0 {
+				for _, err := range errs {
+					r.sum.Errors = append(r.sum.Errors, newStreamError(0, err))
+				}
+				return fmt.Errorf("warmup batch %d: %w", i+1, errs[0])
 			}
-			return sum, fmt.Errorf("warmup batch %d: %w", i+1, errs[0])
-		}
-		cfg.progress(ProgressEvent{Phase: "warmup", Index: i + 1, Total: warmup, Concurrency: concurrency})
-	}
-	sum.Streams = runs * concurrency
-	var firstErr error
-	for i := range runs {
-		results, aggTPS, errs := runBatch(ctx, cfg, concurrency, now)
-		if len(errs) > 0 && ctx.Err() != nil {
-			return Summary{}, &InterruptedError{Completed: len(sum.BatchTPS)}
-		}
-		for _, err := range errs {
-			if firstErr == nil {
-				firstErr = err
+			if r.cfg.Warnf != nil {
+				r.cfg.Warnf("warmup batch %d: %d/%d streams failed (%v); continuing", i+1, len(errs), r.conc, errs[0])
 			}
-			sum.Errors = append(sum.Errors, newStreamError(i+1, err))
 		}
-		sum.Results = append(sum.Results, results...)
-		sum.BatchTPS = append(sum.BatchTPS, aggTPS)
-		cfg.progress(ProgressEvent{Phase: "run", Index: i + 1, Total: runs, Concurrency: concurrency, BatchTPS: aggTPS, Failed: len(errs)})
+		r.cfg.progress(ProgressEvent{Phase: "warmup", Index: i + 1, Total: r.warmup, Concurrency: r.conc})
 	}
-	if len(sum.Results) == 0 {
-		return sum, &AllFailedError{Err: firstErr}
+	r.sum.Streams = r.runs * r.conc
+	return nil
+}
+
+// measure runs the next measured batch, recording failed streams. It only
+// returns an error when the context was cancelled.
+func (r *runner) measure(ctx context.Context) error {
+	i := len(r.sum.BatchTPS)
+	results, aggTPS, errs := runBatch(ctx, r.cfg, r.conc, r.now)
+	if len(errs) > 0 && ctx.Err() != nil {
+		return &InterruptedError{Completed: i}
 	}
-	return sum, nil
+	for _, err := range errs {
+		if r.firstErr == nil {
+			r.firstErr = err
+		}
+		r.sum.Errors = append(r.sum.Errors, newStreamError(i+1, err))
+	}
+	r.sum.Results = append(r.sum.Results, results...)
+	r.sum.BatchTPS = append(r.sum.BatchTPS, aggTPS)
+	r.cfg.progress(ProgressEvent{Phase: "run", Index: i + 1, Total: r.runs, Concurrency: r.conc, BatchTPS: aggTPS, Failed: len(errs)})
+	return nil
+}
+
+// result returns the summary, with an *AllFailedError when no measured
+// stream succeeded.
+func (r *runner) result() (Summary, error) {
+	if len(r.sum.Results) == 0 {
+		return r.sum, &AllFailedError{Err: r.firstErr}
+	}
+	return r.sum, nil
 }
 
 // ParseLevels parses a comma-separated list of concurrency levels (e.g.
@@ -133,13 +190,14 @@ func ParseLevels(s string) ([]int, error) {
 // returning one Summary per level (the throughput-vs-load curve).
 //
 // The first level is the canary: any error there aborts, so auth and URL
-// problems fail fast. A later level that fails — typically a 429'd warmup
-// under load — is kept as a failed Summary (AllFailed() == true) so the
-// curve measured so far is not lost. Interruption always aborts.
+// problems fail fast. Later levels tolerate partial warmup failures (one 429
+// among eight streams), and a level that fails outright is kept as a failed
+// Summary (AllFailed() == true) so the curve measured so far is not lost.
+// Interruption always aborts.
 func RunSweep(ctx context.Context, cfg Config, runs, warmup int, levels []int) ([]Summary, error) {
 	sums := make([]Summary, 0, len(levels))
 	for i, c := range levels {
-		s, err := RunN(ctx, withLabel(cfg, fmt.Sprintf("c=%d", c)), runs, warmup, c)
+		s, err := runOne(ctx, withLabel(cfg, fmt.Sprintf("c=%d", c)), runs, warmup, c, i > 0)
 		if err != nil && (i == 0 || isInterrupted(err)) {
 			return nil, fmt.Errorf("concurrency %d: %w", c, err)
 		}
@@ -244,6 +302,53 @@ func (s Summary) ITL() (p50ms, p95ms float64, ok bool) {
 	}
 	sort.Float64s(gaps)
 	return percentileSorted(gaps, 0.50), percentileSorted(gaps, 0.95), true
+}
+
+// Reasoning reports whether any measured run produced thinking tokens.
+func (s Summary) Reasoning() bool {
+	for _, r := range s.Results {
+		if r.Reasoning {
+			return true
+		}
+	}
+	return false
+}
+
+// HiddenReasoning reports whether thinking was billed but never streamed.
+func (s Summary) HiddenReasoning() bool {
+	for _, r := range s.Results {
+		if r.HiddenReasoning {
+			return true
+		}
+	}
+	return false
+}
+
+// ReasoningExact reports whether every run's thinking count came from usage.
+func (s Summary) ReasoningExact() bool {
+	for _, r := range s.Results {
+		if r.Reasoning && !r.ReasoningExact {
+			return false
+		}
+	}
+	return len(s.Results) > 0
+}
+
+// MedianReasoningTokens returns the median thinking-token count across runs.
+func (s Summary) MedianReasoningTokens() int {
+	return int(math.Round(s.stat(func(r Result) float64 { return float64(r.ReasoningTokens) }).P50))
+}
+
+// TTFA returns the min/p50/max of time-to-first-answer-token in seconds,
+// over the runs that reached the answer, and how many did.
+func (s Summary) TTFA() (Stat, int) {
+	var vals []float64
+	for _, r := range s.Results {
+		if r.TTFA > 0 {
+			vals = append(vals, r.TTFA.Seconds())
+		}
+	}
+	return statOf(vals), len(vals)
 }
 
 // MedianOutputTokens returns the median output-token count across runs.
