@@ -1,14 +1,17 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="tokps — how fast is your LLM, really?" width="100%">
+  <picture>
+    <source media="(max-width: 600px)" srcset="assets/banner-narrow.svg">
+    <img src="assets/banner.svg" alt="tokps — how fast is your LLM, really? A to-scale replay of a real deepseek-chat response: 0.65 s to the first token, then 133.4 tokens per second." width="100%">
+  </picture>
 </p>
 
 <p align="center">
-  <a href="https://github.com/canergulay/tokps/releases"><img src="https://img.shields.io/github/v/release/canergulay/tokps?color=22a35a&label=release" alt="Latest release"></a>
-  <a href="https://pkg.go.dev/github.com/canergulay/tokps"><img src="https://pkg.go.dev/badge/github.com/canergulay/tokps.svg" alt="Go Reference"></a>
-  <a href="https://go.dev/"><img src="https://img.shields.io/badge/go-1.23%2B-00ADD8?logo=go" alt="Go Version"></a>
-  <a href="go.mod"><img src="https://img.shields.io/badge/dependencies-0-22a35a" alt="Zero dependencies"></a>
-  <a href="https://github.com/canergulay/tokps/pkgs/container/tokps"><img src="https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white" alt="Docker image"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
+  <a href="https://github.com/canergulay/tokps/releases"><img src="https://img.shields.io/github/v/release/canergulay/tokps?label=release&labelColor=18202c&color=22a35a" alt="Latest release"></a>
+  <a href="go.mod"><img src="https://img.shields.io/badge/dependencies-0-22a35a?labelColor=18202c" alt="Zero dependencies"></a>
+  <a href="https://pkg.go.dev/github.com/canergulay/tokps"><img src="https://img.shields.io/badge/go.dev-reference-3a4656?labelColor=18202c&logo=go&logoColor=white" alt="Go Reference"></a>
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/go-1.23%2B-3a4656?labelColor=18202c" alt="Go Version"></a>
+  <a href="https://github.com/canergulay/tokps/pkgs/container/tokps"><img src="https://img.shields.io/badge/docker-ghcr.io-3a4656?labelColor=18202c&logo=docker&logoColor=white" alt="Docker image"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-3a4656?labelColor=18202c" alt="License: MIT"></a>
 </p>
 
 <p align="center">
@@ -28,7 +31,10 @@
 </p>
 
 <p align="center">
-  <img src="assets/demo.svg" alt="tokps comparing three DeepSeek models: TTFT, time to first answer, TPS and end-to-end throughput" width="100%">
+  <picture>
+    <source media="(max-width: 600px)" srcset="assets/demo-narrow.svg">
+    <img src="assets/demo.svg" alt="tokps comparing three DeepSeek models: TTFT, time to first answer, TPS and end-to-end throughput" width="100%">
+  </picture>
 </p>
 
 ## Install
@@ -97,6 +103,10 @@ to a detailed single-shot block (per-run TTFT, generation, and total wall).
 
 ### Flags
 
+<details>
+<summary><b>All 23 flags</b>, with defaults</summary>
+<br>
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--url` | *(required)* | Base URL of the endpoint. Optional when every `--target` carries its own. |
@@ -123,15 +133,18 @@ to a detailed single-shot block (per-run TTFT, generation, and total wall).
 | `--max-ttft` | `0` | CI gate: exit 3 if TTFT p50 exceeds this (e.g. `1.5s`). |
 | `--max-error-rate` | — | CI gate: exit 3 if more than this share of streams failed (`0.05` or `5%`; `0` = none allowed). |
 
+Run `tokps` with no flags to see the full list.
+
+</details>
+
+> [!NOTE]
 > Each invocation sends `--warmup` + `--runs` requests (6 by default), so it
 > makes that many billable calls against a metered endpoint. Use
 > `--runs 1 --warmup 0` for a single request.
->
-> Interrupt with Ctrl-C and tokps stops gracefully, printing how many measured
-> runs completed before the signal (exit code 130) — a long benchmark won't
-> hang, and you'll know how far it got.
 
-Run `tokps` with no flags to see the full list.
+Interrupt with Ctrl-C and tokps stops gracefully, printing how many measured
+runs completed before the signal (exit code 130) — a long benchmark won't
+hang, and you'll know how far it got.
 
 ## Why tokps
 
@@ -140,15 +153,36 @@ measures what actually reaches your client — OpenAI, DeepSeek, Z.ai / GLM,
 Groq, OpenRouter, vLLM, llama.cpp, Ollama, a custom gateway, anything that
 speaks `/chat/completions`.
 
-| | |
-|---|---|
-| ⚡ **The two numbers that matter** | Time to first token and generation tok/s, using the standard *N − 1* definition from vLLM, genai-perf and llmperf. |
-| 📊 **Statistics, not anecdotes** | A discarded warmup, then 5 timed runs reported as p50 + min–max, so one cold start can't skew the result. |
-| 🧠 **Reasoning-aware** | Splits thinking from answer tokens and reports *time to first answer*, the wait your users actually feel. Hidden reasoning (o-series, gpt-5) can't inflate TPS. |
-| 🏁 **Cross-provider races** | `--target model@url` repeated: same prompt, interleaved runs, one table. Picks up each provider's own key variable. |
-| 📈 **Load sweeps** | `--sweep=1,2,4,8,16` draws the throughput-vs-concurrency curve and finds where an endpoint saturates. |
-| 🚦 **CI gates** | `--min-tps`, `--max-ttft`, `--max-error-rate` exit with code 3 when a deploy gets slower. |
-| 🧾 **Pipes anywhere** | `--json` for machines, `--md` for PRs and issues, plain text for humans. |
+<table>
+  <tr>
+    <td width="30%" valign="top"><b>The two numbers that matter</b></td>
+    <td>Time to first token and generation tok/s, using the standard <i>N − 1</i> definition from vLLM, genai-perf and llmperf.</td>
+  </tr>
+  <tr>
+    <td width="30%" valign="top"><b>Statistics, not anecdotes</b></td>
+    <td>A discarded warmup, then 5 timed runs reported as p50 + min–max, so one cold start can't skew the result.</td>
+  </tr>
+  <tr>
+    <td width="30%" valign="top"><b>Reasoning-aware</b></td>
+    <td>Splits thinking from answer tokens and reports <i>time to first answer</i>, the wait your users actually feel. Hidden reasoning (o-series, gpt-5) can't inflate TPS.</td>
+  </tr>
+  <tr>
+    <td width="30%" valign="top"><b>Cross-provider races</b></td>
+    <td><code>--target model@url</code> repeated: same prompt, interleaved runs, one table. Picks up each provider's own key variable.</td>
+  </tr>
+  <tr>
+    <td width="30%" valign="top"><b>Load sweeps</b></td>
+    <td><code>--sweep=1,2,4,8,16</code> draws the throughput-vs-concurrency curve and finds where an endpoint saturates.</td>
+  </tr>
+  <tr>
+    <td width="30%" valign="top"><b>CI gates</b></td>
+    <td><code>--min-tps</code>, <code>--max-ttft</code>, <code>--max-error-rate</code> exit with code 3 when a deploy gets slower.</td>
+  </tr>
+  <tr>
+    <td width="30%" valign="top"><b>Pipes anywhere</b></td>
+    <td><code>--json</code> for machines, <code>--md</code> for PRs and issues, plain text for humans.</td>
+  </tr>
+</table>
 
 ## How it measures
 
